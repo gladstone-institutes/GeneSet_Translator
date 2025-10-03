@@ -1,0 +1,167 @@
+{
+  "description": "Alzheimer's Disease test case for validating clustering and convergence",
+  "disease": {
+    "curie": "MONDO:0004975",
+    "label": "Alzheimer's disease"
+  },
+  "query_genes": [
+    {
+      "symbol": "APOE",
+      "curie": "HGNC:613",
+      "role": "Lipid transport",
+      "expected": "Central hub node"
+    },
+    {
+      "symbol": "APP",
+      "curie": "HGNC:620",
+      "role": "Amyloid precursor",
+      "expected": "Converges on BACE1"
+    },
+    {
+      "symbol": "PSEN1",
+      "curie": "HGNC:9508",
+      "role": "³-secretase component",
+      "expected": "Converges on A² production"
+    },
+    {
+      "symbol": "PSEN2",
+      "curie": "HGNC:9509",
+      "role": "³-secretase component",
+      "expected": "Converges on A² production"
+    },
+    {
+      "symbol": "MAPT",
+      "curie": "HGNC:6893",
+      "role": "Tau protein",
+      "expected": "Separate cluster from amyloid"
+    },
+    {
+      "symbol": "TREM2",
+      "curie": "HGNC:17761",
+      "role": "Microglial receptor",
+      "expected": "Inflammation pathway"
+    },
+    {
+      "symbol": "CLU",
+      "curie": "HGNC:2095",
+      "role": "Clusterin/apoJ",
+      "expected": "Converges with APOE on lipid"
+    },
+    {
+      "symbol": "CR1",
+      "curie": "HGNC:2328",
+      "role": "Complement receptor",
+      "expected": "Inflammation cluster"
+    },
+    {
+      "symbol": "BIN1",
+      "curie": "HGNC:1052",
+      "role": "Endocytosis",
+      "expected": "Converges on APP trafficking"
+    },
+    {
+      "symbol": "PICALM",
+      "curie": "HGNC:8301",
+      "role": "Clathrin assembly",
+      "expected": "Converges on endocytosis"
+    },
+    {
+      "symbol": "CD33",
+      "curie": "HGNC:1659",
+      "role": "Myeloid receptor",
+      "expected": "Inflammation pathway"
+    },
+    {
+      "symbol": "MS4A6A",
+      "curie": "HGNC:13378",
+      "role": "Membrane protein",
+      "expected": "Immune cluster"
+    },
+    {
+      "symbol": "ABCA7",
+      "curie": "HGNC:29",
+      "role": "ATP-binding cassette",
+      "expected": "Lipid metabolism with APOE"
+    },
+    {
+      "symbol": "SORL1",
+      "curie": "HGNC:11140",
+      "role": "Sorting receptor",
+      "expected": "APP trafficking"
+    },
+    {
+      "symbol": "BACE1",
+      "curie": "HGNC:933",
+      "role": "²-secretase",
+      "expected": "Central convergence point"
+    }
+  ],
+  "expected_outcomes": {
+    "convergent_nodes": [
+      {
+        "label": "BACE1",
+        "description": "²-secretase, central convergence point for amyloid processing"
+      },
+      {
+        "label": "²-amyloid",
+        "description": "Amyloid-beta peptide, central pathological feature"
+      },
+      {
+        "label": "cholesterol metabolism proteins",
+        "description": "Lipid pathway proteins converging with APOE"
+      }
+    ],
+    "communities": {
+      "num_communities": {
+        "min": 3,
+        "max": 4
+      },
+      "expected_clusters": [
+        {
+          "name": "Amyloid processing",
+          "description": "APP, PSEN1, PSEN2, BACE1, BIN1",
+          "key_genes": ["APP", "PSEN1", "PSEN2", "BACE1", "BIN1"]
+        },
+        {
+          "name": "Lipid metabolism",
+          "description": "APOE, CLU, ABCA7",
+          "key_genes": ["APOE", "CLU", "ABCA7"]
+        },
+        {
+          "name": "Neuroinflammation",
+          "description": "TREM2, CD33, CR1, MS4A6A",
+          "key_genes": ["TREM2", "CD33", "CR1", "MS4A6A"]
+        }
+      ]
+    },
+    "top_targets": [
+      {
+        "gene": "BACE1",
+        "reason": "Central hub, ²-secretase, drugs in development"
+      },
+      {
+        "gene": "APOE",
+        "reason": "Lipid metabolism hub, multiple pathway convergence"
+      },
+      {
+        "gene": "TREM2",
+        "reason": "Neuroinflammation pathway, immune response"
+      }
+    ],
+    "regulatory_circuits": [
+      {
+        "circuit": "APOE-lipid homeostasis feedback loop",
+        "description": "APOE influences lipid metabolism which feeds back to disease progression"
+      }
+    ]
+  },
+  "validation_criteria": {
+    "accuracy_threshold": 0.8,
+    "description": "Results should match known biology with 80%+ accuracy"
+  },
+  "metadata": {
+    "source": "PROJECT_PLAN.md - Alzheimer's Disease test case",
+    "created": "2025-10-03",
+    "phase": "Phase 2"
+  }
+}

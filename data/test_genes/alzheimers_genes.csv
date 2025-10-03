@@ -1,0 +1,16 @@
+gene_symbol,description
+APOE,Lipid transport - Central hub node
+APP,Amyloid precursor - Converges on BACE1
+PSEN1,γ-secretase component - Converges on Aβ production
+PSEN2,γ-secretase component - Converges on Aβ production
+MAPT,Tau protein - Separate cluster from amyloid
+TREM2,Microglial receptor - Inflammation pathway
+CLU,Clusterin/apoJ - Converges with APOE on lipid
+CR1,Complement receptor - Inflammation cluster
+BIN1,Endocytosis - Converges on APP trafficking
+PICALM,Clathrin assembly - Converges on endocytosis
+CD33,Myeloid receptor - Inflammation pathway
+MS4A6A,Membrane protein - Immune cluster
+ABCA7,ATP-binding cassette - Lipid metabolism with APOE
+SORL1,Sorting receptor - APP trafficking
+BACE1,β-secretase - Central convergence point
