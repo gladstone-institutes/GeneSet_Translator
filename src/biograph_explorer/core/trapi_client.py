@@ -146,14 +146,12 @@ class TRAPIClient:
         """Query Translator APIs for gene-disease paths through intermediate entities.
 
         Supports two query patterns:
-        1. If intermediate_categories=None: Gene → [Anything] → Disease (neighborhood discovery)
-        2. If intermediate_categories specified: Gene → [Selected Types] → Disease (filtered 2-hop)
-
-        Extracted from notebook cells 8, 10.
+        1. If intermediate_categories=None: Gene → [Anything] (neighborhood discovery, 1-hop)
+        2. If intermediate_categories specified AND disease_curie: Gene → [Intermediate] → Disease (2-hop)
 
         Args:
             gene_symbols: List of gene symbols to query
-            disease_curie: Optional disease CURIE for context
+            disease_curie: Disease CURIE for 2-hop queries (required if intermediate_categories provided)
             intermediate_categories: Optional list of biolink categories for intermediate nodes
                                    (e.g., ["biolink:Protein", "biolink:ChemicalEntity"])
             predicates: Optional list of predicates to filter (default: auto-discover)
@@ -181,48 +179,117 @@ class TRAPIClient:
 
         input_gene_categories = ["biolink:Gene"]
 
-        # Determine target categories based on intermediate filter
-        if intermediate_categories:
-            # User specified intermediate types: Gene → [Intermediate Types]
-            target_categories = intermediate_categories
-            logger.info(f"Using intermediate categories: {intermediate_categories}")
-        else:
-            # No filter: Gene → [Anything, including Disease]
-            target_categories = ["biolink:Disease"]
+        # Determine query pattern: 1-hop vs 2-hop
+        use_two_hop = intermediate_categories and disease_curie
 
-        # Auto-discover predicates if not provided
-        if predicates is None:
-            predicates = list(
+        if use_two_hop:
+            # 2-HOP QUERY: Gene → [Intermediate] → Disease
+            logger.info(f"Using 2-hop query: Gene → {intermediate_categories} → Disease")
+
+            disease_categories = ["biolink:Disease"]
+
+            # Auto-discover predicates for each hop
+            hop1_predicates = list(
                 set(
                     TCT.select_concept(
                         sub_list=input_gene_categories,
-                        obj_list=target_categories,
+                        obj_list=intermediate_categories,
                         metaKG=self.metaKG,
                     )
                 )
             )
-            logger.info(f"Auto-discovered {len(predicates)} predicates")
 
-        # Select APIs capable of answering queries
-        selected_APIs = TCT.select_API(
-            sub_list=input_gene_categories,
-            obj_list=target_categories,
-            metaKG=self.metaKG,
-        )
+            hop2_predicates = list(
+                set(
+                    TCT.select_concept(
+                        sub_list=intermediate_categories,
+                        obj_list=disease_categories,
+                        metaKG=self.metaKG,
+                    )
+                )
+            )
+
+            logger.info(f"Hop 1 predicates (gene→intermediate): {len(hop1_predicates)}")
+            logger.info(f"Hop 2 predicates (intermediate→disease): {len(hop2_predicates)}")
+
+            # Create custom 2-hop TRAPI query_graph
+            # Structure: n00 (genes) → e00 → n01 (intermediate) → e01 → n02 (disease)
+            query_json = {
+                'message': {
+                    'query_graph': {
+                        'nodes': {
+                            'n00': {
+                                'ids': input_gene_curies,
+                                'categories': input_gene_categories
+                            },
+                            'n01': {
+                                # No IDs = creative query (find any matching nodes)
+                                'categories': intermediate_categories
+                            },
+                            'n02': {
+                                'ids': [disease_curie],
+                                'categories': disease_categories
+                            }
+                        },
+                        'edges': {
+                            'e00': {
+                                'subject': 'n00',
+                                'object': 'n01',
+                                'predicates': hop1_predicates
+                            },
+                            'e01': {
+                                'subject': 'n01',
+                                'object': 'n02',
+                                'predicates': hop2_predicates
+                            }
+                        }
+                    }
+                }
+            }
+
+            # Select APIs based on hop1 (most restrictive)
+            selected_APIs = TCT.select_API(
+                sub_list=input_gene_categories,
+                obj_list=intermediate_categories,
+                metaKG=self.metaKG,
+            )
+
+        else:
+            # 1-HOP QUERY: Gene → [Anything] (neighborhood discovery)
+            logger.info("Using 1-hop neighborhood discovery")
+
+            target_categories = ["biolink:Disease"] if not intermediate_categories else intermediate_categories
+
+            # Auto-discover predicates if not provided
+            if predicates is None:
+                predicates = list(
+                    set(
+                        TCT.select_concept(
+                            sub_list=input_gene_categories,
+                            obj_list=target_categories,
+                            metaKG=self.metaKG,
+                        )
+                    )
+                )
+                logger.info(f"Auto-discovered {len(predicates)} predicates")
+
+            # Select APIs capable of answering queries
+            selected_APIs = TCT.select_API(
+                sub_list=input_gene_categories,
+                obj_list=target_categories,
+                metaKG=self.metaKG,
+            )
+
+            # Format 1-hop query using TCT helper
+            query_json = TCT.format_query_json(
+                input_gene_curies,
+                [],  # Empty target = neighborhood discovery
+                input_gene_categories,
+                target_categories,
+                predicates,
+            )
+
         logger.info(f"Selected {len(selected_APIs)} APIs for querying")
-
-        # Step 3: Format TRAPI query
-        # If intermediate_categories specified, query for those types
-        # Otherwise, use neighborhood discovery (empty target)
-        target_list = [] if not intermediate_categories else []  # Always use neighborhood pattern
-
-        query_json = TCT.format_query_json(
-            input_gene_curies,  # Input genes
-            target_list,  # Empty = find all connections
-            input_gene_categories,
-            target_categories,
-            predicates,
-        )
 
         # Step 4: Build API predicates dictionary
         API_predicates = {}
@@ -276,8 +343,9 @@ class TRAPIClient:
                 "gene_symbols": gene_symbols,
                 "normalized_genes": gene_curie_map,
                 "curie_to_symbol": curie_to_symbol,  # For label lookup
-                "predicates_used": len(predicates),
+                "predicates_used": len(hop1_predicates) + len(hop2_predicates) if use_two_hop else len(predicates) if predicates else 0,
                 "intermediate_categories": intermediate_categories,  # Track filter
+                "query_pattern": "2-hop" if use_two_hop else "1-hop",
             },
             apis_queried=len(selected_APIs),
             apis_succeeded=len([v for v in query_results.values() if isinstance(v, dict)]),

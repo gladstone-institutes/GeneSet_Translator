@@ -136,23 +136,41 @@ disease_curie = st.sidebar.text_input(
 # Intermediate entity type selector
 st.sidebar.markdown("---")
 st.sidebar.subheader("🎯 Query Configuration")
-st.sidebar.markdown("**Find paths:** Gene → **[Intermediate]** → Disease")
 
-intermediate_types = st.sidebar.multiselect(
-    "Intermediate Entity Types",
+# Query pattern selector
+query_pattern = st.sidebar.radio(
+    "Query Pattern",
     options=[
-        "Any (all connections)",
-        "Protein",
-        "ChemicalEntity (Drugs/Metabolites)",
-        "PhenotypicFeature",
-        "Pathway",
-        "BiologicalProcess",
-        "Gene",
-        "AnatomicalEntity",
+        "1-hop (Neighborhood Discovery)",
+        "2-hop (Gene → Intermediate → Disease)"
     ],
-    default=["Any (all connections)"],
-    help="Select intermediate entity types to filter connections. Choose 'Any' for broad exploration."
+    index=1,  # Default to 2-hop
+    help="1-hop finds all direct connections to genes. 2-hop finds therapeutic targets between genes and disease."
 )
+
+if query_pattern == "2-hop (Gene → Intermediate → Disease)":
+    st.sidebar.markdown("**Path:** Gene → **[Intermediate]** → Disease")
+
+    intermediate_types = st.sidebar.multiselect(
+        "Intermediate Entity Types",
+        options=[
+            "Protein",
+            "ChemicalEntity (Drugs/Metabolites)",
+            "Gene",
+            "PhenotypicFeature",
+            "Pathway",
+            "BiologicalProcess",
+            "AnatomicalEntity",
+        ],
+        default=["Protein", "ChemicalEntity (Drugs/Metabolites)", "Gene"],
+        help="Select intermediate entity types for 2-hop query. These are potential therapeutic targets."
+    )
+
+    if not disease_curie:
+        st.sidebar.warning("⚠️ Disease CURIE required for 2-hop queries")
+else:
+    st.sidebar.markdown("**Path:** Gene → **[Any Connection]**")
+    intermediate_types = []  # Empty for 1-hop
 
 st.sidebar.markdown("---")
 
@@ -216,7 +234,7 @@ if run_query:
 
         # Convert intermediate type selections to biolink categories
         intermediate_categories = None
-        if intermediate_types and "Any (all connections)" not in intermediate_types:
+        if query_pattern == "2-hop (Gene → Intermediate → Disease)" and intermediate_types:
             # Map UI labels to biolink categories
             type_mapping = {
                 "Protein": "biolink:Protein",
@@ -228,6 +246,10 @@ if run_query:
                 "AnatomicalEntity": "biolink:AnatomicalEntity",
             }
             intermediate_categories = [type_mapping[t] for t in intermediate_types if t in type_mapping]
+
+            # Validate disease_curie for 2-hop queries
+            if not disease_curie:
+                raise ValidationError("Disease CURIE is required for 2-hop queries")
 
         # Step 2: Query TRAPI
         status_text.text(f"Querying Translator APIs for {len(validated_genes)} genes...")
@@ -244,7 +266,16 @@ if run_query:
         )
         
         progress_bar.progress(60)
-        st.success(f"✓ Found {len(response.edges)} edges from {response.apis_succeeded}/{response.apis_queried} APIs")
+
+        # Show query pattern used
+        query_pattern_used = response.metadata.get("query_pattern", "unknown")
+        if query_pattern_used == "2-hop":
+            intermediate_cats = response.metadata.get("intermediate_categories", [])
+            intermediate_str = ", ".join([c.replace("biolink:", "") for c in intermediate_cats])
+            st.success(f"✓ 2-hop query: Found {len(response.edges)} edges from {response.apis_succeeded}/{response.apis_queried} APIs")
+            st.info(f"🎯 Query: Gene → [{intermediate_str}] → {disease_curie}")
+        else:
+            st.success(f"✓ 1-hop query: Found {len(response.edges)} edges from {response.apis_succeeded}/{response.apis_queried} APIs")
         
         # Step 3: Build graph
         status_text.text("Building knowledge graph...")
