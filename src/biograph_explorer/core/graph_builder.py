@@ -7,7 +7,6 @@ Handles:
 - Gene frequency calculation (convergence metric)
 - Subgraph extraction
 
-Phase 2 Status: Implemented from notebook cells 12, 18
 """
 
 from typing import List, Dict, Any, Optional, Set

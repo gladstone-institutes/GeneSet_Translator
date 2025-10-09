@@ -6,7 +6,7 @@ Implements:
 - Citation validation against actual graph
 - Subgraph extraction for visualization
 
-Phase 3 Status: Stub only - not implemented in Phase 2
+
 TODO: Implement in Phase 3 with Anthropic SDK
 """
 
