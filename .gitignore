@@ -145,3 +145,9 @@ dmypy.json
 # Query caches
 data/cache
 notebooks/data/
+
+# Claude files
+.claude/
+CLAUDE.md
+IMPLEMENTATION_STATUS.md
+PROJECT_PLAN.md
