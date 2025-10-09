@@ -109,7 +109,7 @@ poetry add <package-name>
 
 ## Key Technologies
 
-- **[TCT (Translator Clinical Tools)](https://github.com/NCATSTranslator/Translator-All/wiki/TCT)**: TRAPI query library
+- **[TCT (Translator Component Toolkit)](https://github.com/gloriachin/Translator_component_toolkit)**: TRAPI query library
 - **[NetworkX](https://networkx.org/)**: Graph analysis
 - **[python-louvain](https://github.com/taynaud/python-louvain)**: Community detection
 - **[Streamlit](https://streamlit.io/)**: Web UI
@@ -118,10 +118,8 @@ poetry add <package-name>
 
 ## Current Limitations
 
-- **Knowledge provenance incomplete**: Edge sources/publications not fully displayed (in progress)
-- **API success rate**: Expect 40-60% of TRAPI APIs to succeed (6-10 out of 15) - this is normal
 - **Large graphs**: Networks >200 nodes are auto-sampled for visualization performance
-- **Session persistence**: Manual query re-run required (auto-save coming in Phase 3)
+- **Session persistence**: Manual query re-run required or loading cached queries (auto-save coming in Phase 3)
 
 ## Troubleshooting
 
