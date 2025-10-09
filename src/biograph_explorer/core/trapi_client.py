@@ -315,6 +315,7 @@ class TRAPIClient:
         edges = []
         edge_sources = {}  # Track which API provided each edge
         query_result_id = 0  # Assign unique ID to each query result
+        successful_apis = set()  # Track unique APIs that returned edges
 
         for k, v in query_results.items():
             if isinstance(v, dict):
@@ -335,6 +336,12 @@ class TRAPIClient:
                 if 'knowledge_source' not in v:
                     v['knowledge_source'] = []
 
+                # Track successful APIs from sources field (only count aggregators we queried)
+                for source in v.get('sources', []):
+                    if isinstance(source, dict) and 'resource_id' in source:
+                        if source.get('resource_role') == 'aggregator_knowledge_source':
+                            successful_apis.add(source['resource_id'])
+
         # Create CURIE to symbol reverse mapping for labels
         curie_to_symbol = {curie: symbol for symbol, curie in gene_curie_map.items()}
 
@@ -353,7 +360,7 @@ class TRAPIClient:
                 "query_pattern": "2-hop" if use_two_hop else "1-hop",
             },
             apis_queried=len(selected_APIs),
-            apis_succeeded=len([v for v in query_results.values() if isinstance(v, dict)]),
+            apis_succeeded=len(successful_apis),
         )
 
         logger.info(f"Query complete: {len(edges)} edges from {response.apis_succeeded}/{response.apis_queried} APIs")
