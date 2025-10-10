@@ -74,7 +74,8 @@ poetry install
 streamlit run app.py
 ```
 
-![BioGraph Explorer Main Interface](static/images/main_page.png)
+
+![BioGraph Explorer Main Interface](static/images/main_page.png)   
 
 
 ### 2. Try an Example Query
@@ -95,19 +96,24 @@ The app displays results in three tabs:
 
 ### 4. Try Your Own Genes
 
-Create a CSV with a `gene_symbol` column (see [data/test_genes/covid19_genes.csv](data/test_genes/covid19_genes.csv) for format) or enter genes manually in the sidebar.
+- Create a CSV with a `gene_symbol` column (see [data/test_genes/covid19_genes.csv](data/test_genes/covid19_genes.csv) for format) or enter genes manually in the sidebar. 
 
 ## Understanding Your Results
 
 **Query Patterns:**
 - **1-hop** (`Gene → Any`): Finds all connections to your genes (broad discovery)
-- **2-hop** (`Gene → Intermediate → Disease`): Finds therapeutic targets between genes and a disease (requires disease CURIE like `MONDO:0100096` for COVID-19)
+- **2-hop** (`Gene → Intermediate → Disease`): Finds intermediate nodes of slected types between genes and a disease (requires disease CURIE like `MONDO:0100096` for COVID-19)
 
 **Key Metrics:**
 - **Gene Frequency**: How many query genes connect to each node (convergence indicator)
 - **PageRank**: Relative importance in the network
 - **Communities**: Biological modules detected by Louvain clustering
 
+
+## Current Limitations
+
+- **Large graphs**: Network nodes are auto-sampled by top intermediates with the most connections to query genes for visualization performance
+- **Session persistence**: Manual query re-run required or loading cached queries (better session management coming in Phase 3)
 
 
 ## Development
@@ -153,6 +159,11 @@ poetry add <package-name>
 - Use simpler layout algorithms (dagre, breadthfirst vs. fcose)
 - Reduce `max_intermediates` slider to sample fewer nodes
 - View individual communities instead of full graph
+
+
+## Acknowledgements   
+
+`biograph_explorer` was created with [`cookiecutter`](https://cookiecutter.readthedocs.io/en/latest/) and the `py-pkgs-cookiecutter` [template](https://github.com/py-pkgs/py-pkgs-cookiecutter). The streamlit theme was created by github user [jmedia65](https://github.com/jmedia65/awesome-streamlit-themes).
 
 
 ## License & Citation
