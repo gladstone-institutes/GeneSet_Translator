@@ -107,8 +107,6 @@ class TRAPIClient:
     def normalize_genes(self, gene_symbols: List[str]) -> Dict[str, str]:
         """Normalize gene symbols to CURIEs using TCT name_resolver.
 
-        Extracted from notebook cell 4.
-
         Args:
             gene_symbols: List of HUGO gene symbols (e.g., ['CD6', 'IFITM3'])
 

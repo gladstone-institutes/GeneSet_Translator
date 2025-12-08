@@ -34,6 +34,7 @@ The goal is to discover effective workflows for transforming complex high dimens
 - ✅ Query caching for development
 
 **Planned Features (Phase 3):**
+- 📋 Highlight the query genes in the resulting networks
 - 📋 Node resizing in network view - currently broken
 - 📋 Better clustering algorithms - current louvain clustering is not ideal for a highly constrained network (only 1 disease node)
 - 📋 Filter results by predicate types
@@ -165,6 +166,9 @@ poetry add <package-name>
 
 `biograph_explorer` was created with [`cookiecutter`](https://cookiecutter.readthedocs.io/en/latest/) and the `py-pkgs-cookiecutter` [template](https://github.com/py-pkgs/py-pkgs-cookiecutter). The streamlit theme was created by github user [jmedia65](https://github.com/jmedia65/awesome-streamlit-themes).
 
+## AI Disclosure Statement
+
+Generative AI tools (Claude Code, Anthropic) were used as coding assistants during the development of this package. The author maintains full responsibility for the accuracy, reproducibility, and scientific validity of all code. AI-assisted outputs were reviewed and validated against expected behavior before integration. The research questions, analytical approaches, parameter selections, and scientific interpretations were determined independently by the author without AI input.
 
 ## License & Citation
 
