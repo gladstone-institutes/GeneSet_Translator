@@ -16,6 +16,8 @@ pandas = "^2.2.1"
 python-louvain = "^0.16"
 streamlit-cytoscape = ">=0.1.1"
 scipy = "^1.16.2"
+pyyaml = "^6.0.3"
+treelib = "^1.8.0"
 
 
 [tool.poetry.group.dev.dependencies]

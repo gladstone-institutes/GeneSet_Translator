@@ -171,6 +171,9 @@ def prepare_cytoscape_elements(
     graph: nx.DiGraph,
     query_genes: List[str],
     sizing_metric: str = "gene_frequency",
+    base_node_size: int = 30,
+    use_metric_sizing: bool = True,
+    edge_width: int = 2,
 ) -> Dict[str, List[Dict]]:
     """Convert NetworkX graph to Cytoscape.js elements format.
 
@@ -180,6 +183,9 @@ def prepare_cytoscape_elements(
         graph: NetworkX DiGraph to convert
         query_genes: List of query gene node IDs (for highlighting)
         sizing_metric: Metric for node sizing (gene_frequency, pagerank, betweenness, degree)
+        base_node_size: Base size for nodes in pixels (default: 30)
+        use_metric_sizing: If True, size nodes by metric; if False, use uniform size
+        edge_width: Width of edges in pixels (default: 2)
 
     Returns:
         Dictionary with "nodes" and "edges" lists in Cytoscape.js format
@@ -238,14 +244,26 @@ def prepare_cytoscape_elements(
             node_element["data"]["bg_height"] = "70%"
             node_element["data"]["bg_position_y"] = "50%"
 
-        # Calculate node size (15-45px range from PROJECT_PLAN.md)
-        base_size = 15 + (normalized_metrics.get(node_id, 0.5) * 30)
+        # Calculate node size
+        if use_metric_sizing:
+            # Scale around base_node_size: range is base_node_size ± 15px
+            min_size = max(10, base_node_size - 15)
+            max_size = base_node_size + 15
+            size_range = max_size - min_size
+            node_size = min_size + (normalized_metrics.get(node_id, 0.5) * size_range)
+        else:
+            # Uniform sizing - all nodes same size
+            node_size = base_node_size
 
-        # Query genes (triangles) get larger size (10% bigger, minimum 30px)
+        # Query genes (triangles) get larger size (10% bigger, minimum base_node_size)
         if is_query_gene:
-            base_size = max(base_size * 1.1, 30)
+            node_size = max(node_size * 1.1, base_node_size)
 
-        node_element["data"]["size"] = round(base_size, 1)
+        node_element["data"]["size"] = round(node_size, 1)
+
+        # Calculate font size proportional to node size (8-14px range)
+        font_size = max(8, min(14, round(node_size * 0.25)))
+        node_element["data"]["font_size"] = font_size
 
         # Add metrics for tooltip/inspection
         node_element["data"]["gene_frequency"] = node_attrs.get("gene_frequency", 0)
@@ -428,6 +446,12 @@ def prepare_cytoscape_elements(
             if query_result_id is not None:
                 edge_element["data"]["query_result_id"] = query_result_id
 
+        # Add edge width and scaled font size
+        edge_element["data"]["edge_width"] = edge_width
+        # Scale font: 8px at width 1, up to 14px at width 10
+        edge_font_size = max(8, min(14, 6 + edge_width))
+        edge_element["data"]["edge_font_size"] = edge_font_size
+
     return {"nodes": elements["nodes"], "edges": elements["edges"]}
 
 
@@ -458,6 +482,15 @@ def create_node_styles(graph: nx.DiGraph) -> List["NodeStyle"]:
 
         # Use "name" as caption (displays gene symbol or node label)
         # custom_styles reads size from node data for dynamic sizing
+        # Label styling: dynamic font size + background box for visibility
+        label_styles = {
+            "font-size": "data(font_size)",
+            "text-background-color": "#ffffff",
+            "text-background-opacity": 0.95,
+            "text-background-padding": "2px",
+            "text-background-shape": "roundrectangle",
+        }
+
         if icon:
             node_styles.append(
                 NodeStyle(
@@ -471,7 +504,8 @@ def create_node_styles(graph: nx.DiGraph) -> List["NodeStyle"]:
                         "shape": "data(node_shape)",
                         "background-width": "data(bg_width)",
                         "background-height": "data(bg_height)",
-                        "background-position-y": "data(bg_position_y)"
+                        "background-position-y": "data(bg_position_y)",
+                        **label_styles,
                     }
                 )
             )
@@ -484,7 +518,8 @@ def create_node_styles(graph: nx.DiGraph) -> List["NodeStyle"]:
                     custom_styles={
                         "width": "data(size)",
                         "height": "data(size)",
-                        "shape": "data(node_shape)"
+                        "shape": "data(node_shape)",
+                        **label_styles,
                     }
                 )
             )
@@ -511,6 +546,12 @@ def create_edge_styles(graph: nx.DiGraph) -> List["EdgeStyle"]:
         if predicate:
             predicates.add(predicate)
 
+    # Edge styling: dynamic width and font size
+    edge_custom_styles = {
+        "width": "data(edge_width)",
+        "font-size": "data(edge_font_size)",
+    }
+
     # Create EdgeStyle for each predicate
     edge_styles = []
     for predicate in sorted(predicates):
@@ -518,7 +559,8 @@ def create_edge_styles(graph: nx.DiGraph) -> List["EdgeStyle"]:
             EdgeStyle(
                 label=predicate,     # Matches edge data["label"]
                 caption="label",     # Display the label attribute
-                directed=True        # Show arrows
+                directed=True,       # Show arrows
+                custom_styles=edge_custom_styles,
             )
         )
 
@@ -528,7 +570,8 @@ def create_edge_styles(graph: nx.DiGraph) -> List["EdgeStyle"]:
             EdgeStyle(
                 label="default",     # Default label
                 caption="label",     # Display the label attribute
-                directed=True        # Show arrows
+                directed=True,       # Show arrows
+                custom_styles=edge_custom_styles,
             )
         )
 
@@ -646,6 +689,9 @@ def render_network_visualization(
     max_intermediates: int = 200,
     highlight_nodes: Optional[List[str]] = None,
     disease_curie: Optional[str] = None,
+    base_node_size: int = 30,
+    use_metric_sizing: bool = True,
+    edge_width: int = 2,
 ) -> Dict[str, Any]:
     """Prepare network visualization data for streamlit-cytoscape component.
 
@@ -657,6 +703,9 @@ def render_network_visualization(
         max_intermediates: Maximum intermediate nodes to display (default: 200)
         highlight_nodes: Optional list of node IDs to highlight (for citations)
         disease_curie: Optional disease CURIE (always included if present)
+        base_node_size: Base size for nodes in pixels (default: 30)
+        use_metric_sizing: If True, size nodes by metric; if False, use uniform size
+        edge_width: Width of edges in pixels (default: 2)
 
     Returns:
         Dictionary with elements, node_styles, edge_styles, and layout config
@@ -684,7 +733,9 @@ def render_network_visualization(
         )
 
         # Prepare Cytoscape elements
-        elements = prepare_cytoscape_elements(graph, query_genes, sizing_metric)
+        elements = prepare_cytoscape_elements(
+            graph, query_genes, sizing_metric, base_node_size, use_metric_sizing, edge_width
+        )
 
         # Create node and edge styles
         node_styles = create_node_styles(graph)

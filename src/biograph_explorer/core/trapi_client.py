@@ -23,6 +23,8 @@ try:
 except ImportError:
     TCT_AVAILABLE = False
 
+from biograph_explorer.utils.biolink_predicates import filter_predicates_by_granularity
+
 logger = logging.getLogger(__name__)
 
 
@@ -133,12 +135,83 @@ class TRAPIClient:
         logger.info(f"Successfully normalized {len(results)}/{len(gene_symbols)} genes")
         return results
 
+    def lookup_disease(self, query: str, max_results: int = 10) -> List[Dict[str, Any]]:
+        """Look up disease by name using TCT name resolver.
+
+        Uses autocomplete for partial matching (e.g., "Alzheimer" matches "Alzheimer disease").
+
+        Args:
+            query: Disease name or partial name to search
+            max_results: Maximum number of results to return
+
+        Returns:
+            List of dicts with: curie, label, types, synonyms
+        """
+        if not query or len(query.strip()) < 2:
+            return []
+
+        logger.info(f"Looking up disease: '{query}'")
+
+        try:
+            # Use name_resolver with autocomplete for partial matching
+            results = name_resolver.lookup(
+                query.strip(),
+                return_top_response=False,  # Get all matches
+                return_synonyms=True,
+                autocomplete=True,
+            )
+
+            # Handle single result (returns TranslatorNode, not list)
+            if not isinstance(results, list):
+                results = [results] if results else []
+
+            # Convert to list of dicts, filtering for disease-like entities
+            disease_results = []
+            seen_curies = set()
+
+            for node in results[:max_results * 2]:  # Get extra to allow filtering
+                if not hasattr(node, 'curie') or not node.curie:
+                    continue
+
+                # Skip duplicates
+                if node.curie in seen_curies:
+                    continue
+                seen_curies.add(node.curie)
+
+                # Get types/categories
+                types = getattr(node, 'types', []) or []
+
+                # Filter for disease-related entities (prioritize MONDO, DOID, HP, OMIM)
+                curie_prefix = node.curie.split(':')[0] if ':' in node.curie else ''
+                is_disease_curie = curie_prefix in ['MONDO', 'DOID', 'HP', 'OMIM', 'ORPHANET', 'MESH']
+                is_disease_type = any('Disease' in t or 'Phenotypic' in t for t in types)
+
+                if is_disease_curie or is_disease_type:
+                    disease_results.append({
+                        'curie': node.curie,
+                        'label': getattr(node, 'label', node.curie),
+                        'types': types,
+                        'synonyms': getattr(node, 'synonyms', []) or [],
+                    })
+
+                if len(disease_results) >= max_results:
+                    break
+
+            logger.info(f"Found {len(disease_results)} disease matches for '{query}'")
+            return disease_results
+
+        except Exception as e:
+            logger.warning(f"Disease lookup failed for '{query}': {e}")
+            return []
+
     def query_gene_neighborhood(
         self,
         gene_symbols: List[str],
         disease_curie: Optional[str] = None,
         intermediate_categories: Optional[List[str]] = None,
         predicates: Optional[List[str]] = None,
+        predicate_min_depth: int = 2,
+        exclude_literature: bool = True,
         progress_callback: Optional[Callable[[str], None]] = None,
     ) -> TRAPIResponse:
         """Query Translator APIs for gene-disease paths through intermediate entities.
@@ -153,6 +226,9 @@ class TRAPIClient:
             intermediate_categories: Optional list of biolink categories for intermediate nodes
                                    (e.g., ["biolink:Protein", "biolink:ChemicalEntity"])
             predicates: Optional list of predicates to filter (default: auto-discover)
+            predicate_min_depth: Minimum depth in biolink hierarchy (0=all, 1=exclude root,
+                               2=standard, 3=specific only). Default: 2
+            exclude_literature: If True, exclude 'occurs_together_in_literature_with'. Default: True
             progress_callback: Optional callback for progress updates
 
         Returns:
@@ -340,6 +416,22 @@ class TRAPIClient:
                         if source.get('resource_role') == 'aggregator_knowledge_source':
                             successful_apis.add(source['resource_id'])
 
+        # Step 7: Post-filter edges by predicate granularity
+        # APIs may return edges with predicates we didn't request, so filter them here
+        edges_before_filter = len(edges)
+        filtered_edges = []
+        for edge in edges:
+            edge_predicate = edge.get('predicate', '')
+            # Check if this predicate passes our filter
+            filtered = filter_predicates_by_granularity(
+                [edge_predicate], predicate_min_depth, exclude_literature
+            )
+            if filtered:
+                filtered_edges.append(edge)
+
+        edges = filtered_edges
+        logger.info(f"Post-filtered edges: {len(edges)} (removed {edges_before_filter - len(edges)} edges)")
+
         # Create CURIE to symbol reverse mapping for labels
         curie_to_symbol = {curie: symbol for symbol, curie in gene_curie_map.items()}
 
@@ -356,6 +448,8 @@ class TRAPIClient:
                 "predicates_used": len(hop1_predicates) + len(hop2_predicates) if use_two_hop else len(predicates) if predicates else 0,
                 "intermediate_categories": intermediate_categories,  # Track filter
                 "query_pattern": "2-hop" if use_two_hop else "1-hop",
+                "predicate_min_depth": predicate_min_depth,
+                "exclude_literature": exclude_literature,
             },
             apis_queried=len(selected_APIs),
             apis_succeeded=len(successful_apis),

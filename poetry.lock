@@ -4661,6 +4661,21 @@ docs = ["myst-parser", "pydata-sphinx-theme", "sphinx"]
 test = ["argcomplete (>=3.0.3)", "mypy (>=1.7.0)", "pre-commit", "pytest (>=7.0,<8.2)", "pytest-mock", "pytest-mypy-testing"]
 
 [[package]]
+name = "treelib"
+version = "1.8.0"
+description = "A Python implementation of tree structure."
+optional = false
+python-versions = "<4.0,>=3.7"
+groups = ["main"]
+files = [
+    {file = "treelib-1.8.0-py3-none-any.whl", hash = "sha256:5235d1ebf988c5026f26ce6e5e0cd470007f16d4978185f5c9b3eee8a25aef81"},
+    {file = "treelib-1.8.0.tar.gz", hash = "sha256:e1be2c6b66ffbfae85079fc4c76fb4909946d01d915ee29ff6795de53aed5d55"},
+]
+
+[package.dependencies]
+six = ">=1.13.0"
+
+[[package]]
 name = "types-python-dateutil"
 version = "2.9.0.20250822"
 description = "Typing stubs for python-dateutil"
@@ -4907,4 +4922,4 @@ files = [
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.11,<4.0"
-content-hash = "d90db3d070f5095df8f75fa5761ec4df7b9edb12b09909f13499596c476e0b42"
+content-hash = "a2c6013da74ecaf424cbf12917259fdf5319e597d3f601125e8cda42a11d20b9"

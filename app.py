@@ -13,6 +13,10 @@ logging.basicConfig(level=logging.INFO)
 
 from biograph_explorer.core import TRAPIClient, GraphBuilder, ClusteringEngine
 from biograph_explorer.utils import validate_gene_list, validate_disease_curie, ValidationError
+from biograph_explorer.utils.biolink_predicates import (
+    GRANULARITY_PRESETS,
+    get_allowed_predicates_for_display,
+)
 
 # Page config
 st.set_page_config(
@@ -69,7 +73,10 @@ if input_method == "Example Dataset":
     else:
         csv_path = "data/test_genes/covid19_genes.csv"
         disease_curie = "MONDO:0100096"
-    
+
+    # Update session state when dataset changes
+    st.session_state.disease_selected_curie = disease_curie
+
     try:
         df = pd.read_csv(csv_path)
         genes = df['gene_symbol'].tolist()
@@ -190,12 +197,84 @@ else:  # Load Cached Query
     else:
         st.sidebar.warning("No cached queries found. Run a query first to create cached results.")
 
-# Disease CURIE input
-disease_curie = st.sidebar.text_input(
-    "Disease CURIE",
-    value=disease_curie,
-    help="Disease CURIE ID (e.g., MONDO:0004975 for Alzheimer's)"
+# Disease CURIE lookup
+st.sidebar.subheader(":material/search: Disease Lookup")
+
+# Initialize session state for disease lookup
+if 'disease_search_results' not in st.session_state:
+    st.session_state.disease_search_results = []
+if 'disease_selected_curie' not in st.session_state:
+    st.session_state.disease_selected_curie = disease_curie
+
+# Input mode toggle
+disease_input_mode = st.sidebar.radio(
+    "Disease Input Mode",
+    ["Search by Name", "Enter CURIE Directly"],
+    index=0,
+    horizontal=True,
+    label_visibility="collapsed"
 )
+
+if disease_input_mode == "Search by Name":
+    disease_search_query = st.sidebar.text_input(
+        "Search Disease",
+        placeholder="e.g., Alzheimer, COVID-19, diabetes",
+        help="Type a disease name to search. Results will appear below."
+    )
+
+    if disease_search_query and len(disease_search_query) >= 2:
+        # Perform lookup
+        client = TRAPIClient(cache_dir=Path("data/cache"))
+        with st.sidebar.status("Searching...", expanded=False):
+            search_results = client.lookup_disease(disease_search_query, max_results=10)
+        st.session_state.disease_search_results = search_results
+
+        if search_results:
+            # Build options for selectbox
+            options = {
+                f"{r['label']} ({r['curie']})": r
+                for r in search_results
+            }
+
+            selected_option = st.sidebar.selectbox(
+                "Select Disease",
+                options=list(options.keys()),
+                help="Choose from the search results"
+            )
+
+            if selected_option:
+                selected_disease = options[selected_option]
+                disease_curie = selected_disease['curie']
+                st.session_state.disease_selected_curie = disease_curie
+
+                # Show confirmation details
+                with st.sidebar.expander(":material/info: Disease Details", expanded=False):
+                    st.markdown(f"**CURIE:** `{selected_disease['curie']}`")
+                    st.markdown(f"**Label:** {selected_disease['label']}")
+                    if selected_disease.get('types'):
+                        types_str = ", ".join([t.replace("biolink:", "") for t in selected_disease['types'][:3]])
+                        st.markdown(f"**Types:** {types_str}")
+                    if selected_disease.get('synonyms'):
+                        synonyms_preview = selected_disease['synonyms'][:5]
+                        st.markdown(f"**Synonyms:** {', '.join(synonyms_preview)}")
+                        if len(selected_disease['synonyms']) > 5:
+                            st.caption(f"...and {len(selected_disease['synonyms']) - 5} more")
+        else:
+            st.sidebar.warning(f"No diseases found for '{disease_search_query}'")
+            disease_curie = st.session_state.disease_selected_curie
+    else:
+        disease_curie = st.session_state.disease_selected_curie
+        if disease_curie:
+            st.sidebar.info(f":material/check_circle: Using: `{disease_curie}`")
+
+else:
+    # Direct CURIE input mode
+    disease_curie = st.sidebar.text_input(
+        "Disease CURIE",
+        value=st.session_state.disease_selected_curie or disease_curie,
+        help="Disease CURIE ID (e.g., MONDO:0004975 for Alzheimer's)"
+    )
+    st.session_state.disease_selected_curie = disease_curie
 
 # Intermediate entity type selector
 st.sidebar.markdown("---")
@@ -235,6 +314,37 @@ if query_pattern == "2-hop (Gene → Intermediate → Disease)":
 else:
     st.sidebar.markdown("**Path:** Gene → **[Any Connection]**")
     intermediate_types = []  # Empty for 1-hop
+
+# Predicate Granularity Section
+st.sidebar.markdown("### Predicate Filtering")
+
+predicate_preset = st.sidebar.selectbox(
+    "Relationship Granularity",
+    options=["All Relationships", "Standard", "Specific Only"],
+    index=1,  # Default to "Standard"
+    help="Filter out vague relationship types. Standard excludes generic predicates like 'related_to'."
+)
+
+exclude_literature = st.sidebar.checkbox(
+    "Exclude literature co-occurrence",
+    value=True,
+    help="Exclude 'occurs_together_in_literature_with' predicate"
+)
+
+# Show included predicates in expander
+with st.sidebar.expander("View included predicates"):
+    min_depth = GRANULARITY_PRESETS[predicate_preset]["min_depth"]
+    allowed = get_allowed_predicates_for_display(min_depth, exclude_literature)
+    st.write(f"**{len(allowed)}** predicates included:")
+    # Display all predicates in a scrollable text area
+    predicate_display = "\n".join(sorted(allowed))
+    st.text_area(
+        "Predicates",
+        value=predicate_display,
+        height=200,
+        disabled=True,
+        label_visibility="collapsed"
+    )
 
 st.sidebar.markdown("---")
 
@@ -321,10 +431,15 @@ if run_query:
         def progress_callback(msg):
             status_text.text(msg)
 
+        # Get predicate filtering settings
+        predicate_min_depth = GRANULARITY_PRESETS[predicate_preset]["min_depth"]
+
         response = client.query_gene_neighborhood(
             validated_genes,
             disease_curie=disease_curie,
             intermediate_categories=intermediate_categories,
+            predicate_min_depth=predicate_min_depth,
+            exclude_literature=exclude_literature,
             progress_callback=progress_callback
         )
         
@@ -435,7 +550,7 @@ if st.session_state.graph:
     with tab2:
         st.header("Knowledge Graph Visualization")
 
-        # Visualization controls
+        # Visualization controls - Row 1
         col1, col2, col3, col4 = st.columns([2, 2, 2, 2])
 
         with col1:
@@ -504,6 +619,36 @@ if st.session_state.graph:
                 help="View all nodes or filter to a specific community"
             )
 
+        # Visualization controls - Row 2 (Node sizing)
+        col5, col6, col7 = st.columns([2, 2, 4])
+
+        with col5:
+            base_node_size = st.slider(
+                "Base Node Size",
+                min_value=10,
+                max_value=100,
+                value=30,
+                step=5,
+                help="Base size for all nodes in pixels"
+            )
+
+        with col6:
+            use_metric_sizing = st.checkbox(
+                "Use Metric-Based Sizing",
+                value=True,
+                help="When enabled, node sizes vary by the selected metric. When disabled, all nodes are the same size."
+            )
+
+        with col7:
+            edge_width = st.slider(
+                "Edge Width",
+                min_value=1,
+                max_value=10,
+                value=2,
+                step=1,
+                help="Width of edges in pixels"
+            )
+
         # Render streamlit-cytoscape visualization
         from biograph_explorer.ui.network_viz import render_network_visualization
         from streamlit_cytoscape import streamlit_cytoscape
@@ -539,6 +684,9 @@ if st.session_state.graph:
             layout=layout,
             max_intermediates=max_intermediates,
             disease_curie=st.session_state.disease_curie,
+            base_node_size=base_node_size,
+            use_metric_sizing=use_metric_sizing,
+            edge_width=edge_width,
         )
 
         if viz_data:
