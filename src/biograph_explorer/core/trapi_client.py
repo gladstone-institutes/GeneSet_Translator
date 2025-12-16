@@ -12,8 +12,12 @@ Handles:
 
 import json
 import requests
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from copy import deepcopy
+from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Callable
+from typing import List, Dict, Any, Optional, Callable, Tuple
 from datetime import datetime
 from pydantic import BaseModel, Field
 import logging
@@ -22,7 +26,7 @@ import logging
 NODE_NORMALIZER_URL = "https://nodenormalization-sri.renci.org/1.4/get_normalized_nodes"
 
 try:
-    from TCT import TCT, name_resolver, translator_metakg, translator_kpinfo, translator_query
+    from TCT import TCT, name_resolver, translator_metakg, translator_kpinfo
     TCT_AVAILABLE = True
 except ImportError:
     TCT_AVAILABLE = False
@@ -30,6 +34,16 @@ except ImportError:
 from biograph_explorer.utils.biolink_predicates import filter_predicates_by_granularity
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class APITiming:
+    """Timing information for a single API query."""
+    api_name: str
+    duration_seconds: float
+    success: bool
+    edge_count: int
+    error: Optional[str] = None
 
 
 class TRAPIResponse(BaseModel):
@@ -58,15 +72,13 @@ class TRAPIClient:
     def __init__(
         self,
         cache_dir: Path = Path("data/cache"),
-        timeout: int = 30,
-        max_workers: int = 4,
+        timeout: int = 240,
     ):
         """Initialize TRAPI client.
 
         Args:
             cache_dir: Directory for caching responses
-            timeout: API timeout in seconds
-            max_workers: Number of parallel workers for batch queries
+            timeout: API timeout in seconds (default: 240s)
         """
         if not TCT_AVAILABLE:
             raise ImportError("TCT library not installed. Run: pip install TCT")
@@ -74,7 +86,6 @@ class TRAPIClient:
         self.cache_dir = cache_dir
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.timeout = timeout
-        self.max_workers = max_workers
 
         # Translator resources (loaded lazily)
         self.APInames = None
@@ -109,6 +120,172 @@ class TRAPIClient:
             logger.info(f"Loaded resources (fallback): {len(self.APInames)} APIs, {len(self.metaKG)} MetaKG edges")
 
         self._resources_loaded = True
+
+    def _optimize_query_json(
+        self, query_json: Dict[str, Any], api_name: str, api_predicates: Dict[str, List[str]]
+    ) -> Dict[str, Any]:
+        """Optimize query JSON by filtering to predicates supported by the API.
+
+        Matches TCT's optimize_query_json behavior - only optimizes edge 'e00'.
+
+        Args:
+            query_json: TRAPI query JSON
+            api_name: Name of the API to query
+            api_predicates: Dict mapping API names to their supported predicates
+
+        Returns:
+            Optimized query JSON with filtered predicates
+        """
+        # Use shallow copy like TCT does
+        query_json_cur = query_json.copy()
+
+        # Only optimize e00 predicates (matching TCT behavior)
+        if api_name in api_predicates:
+            try:
+                e00_predicates = query_json_cur['message']['query_graph']['edges']['e00']['predicates']
+                shared_predicates = list(
+                    set(api_predicates[api_name]).intersection(e00_predicates)
+                )
+                if shared_predicates:
+                    query_json_cur['message']['query_graph']['edges']['e00']['predicates'] = shared_predicates
+            except KeyError:
+                # No e00 edge or no predicates - keep original
+                pass
+
+        return query_json_cur
+
+    def _query_api_with_timing(
+        self,
+        api_name: str,
+        query_json: Dict[str, Any],
+        api_predicates: Dict[str, List[str]],
+    ) -> Tuple[Optional[Dict[str, Any]], APITiming]:
+        """Query a single API and record timing information.
+
+        Matches TCT's query_KP behavior but adds timing instrumentation.
+
+        Args:
+            api_name: Name of the API to query
+            query_json: TRAPI query JSON
+            api_predicates: Dict mapping API names to their supported predicates
+
+        Returns:
+            Tuple of (result dict or None, APITiming with timing info)
+        """
+        api_url = self.APInames[api_name]
+        # Deep copy per-thread to avoid race conditions (matching TCT's query_KP behavior)
+        query_copy = deepcopy(query_json)
+        query_json_cur = self._optimize_query_json(query_copy, api_name, api_predicates)
+
+        start_time = time.time()
+        error_msg = None
+        result = None
+        edge_count = 0
+
+        try:
+            response = requests.post(api_url, json=query_json_cur, timeout=self.timeout)
+            duration = time.time() - start_time
+
+            if response.status_code == 200:
+                data = response.json().get("message", {})
+                kg = data.get("knowledge_graph", {})
+                edges = kg.get("edges", {})
+
+                if edges:
+                    edge_count = len(edges)
+                    result = data
+                    logger.info(f"API '{api_name}' completed in {duration:.2f}s ({edge_count} edges)")
+                elif "knowledge_graph" in data:
+                    # API returned but with no edges (matches TCT behavior)
+                    logger.info(f"API '{api_name}' completed in {duration:.2f}s (0 edges)")
+                else:
+                    logger.info(f"API '{api_name}' completed in {duration:.2f}s (no KG)")
+            else:
+                error_msg = f"HTTP {response.status_code}"
+                logger.info(f"API '{api_name}' failed in {duration:.2f}s ({error_msg})")
+
+        except requests.Timeout:
+            duration = time.time() - start_time
+            error_msg = "Timeout"
+            logger.info(f"API '{api_name}' timed out after {duration:.2f}s")
+        except Exception as e:
+            duration = time.time() - start_time
+            error_msg = str(e)
+            logger.info(f"API '{api_name}' error in {duration:.2f}s: {error_msg}")
+
+        timing = APITiming(
+            api_name=api_name,
+            duration_seconds=round(duration, 3),
+            success=result is not None,
+            edge_count=edge_count,
+            error=error_msg,
+        )
+
+        return result, timing
+
+    def _parallel_api_query_with_timing(
+        self,
+        query_json: Dict[str, Any],
+        selected_apis: List[str],
+        api_predicates: Dict[str, List[str]],
+    ) -> Tuple[Dict[str, Any], List[APITiming]]:
+        """Execute parallel API queries with timing instrumentation.
+
+        Matches TCT's parallel_api_query behavior but adds timing.
+
+        Args:
+            query_json: TRAPI query JSON
+            selected_apis: List of API names to query
+            api_predicates: Dict mapping API names to their supported predicates
+
+        Returns:
+            Tuple of (merged results dict, list of APITiming for each API)
+        """
+        results = []
+        timings = []
+
+        with ThreadPoolExecutor(max_workers=len(selected_apis)) as executor:
+            # Each thread does its own deepcopy in _query_api_with_timing (matching TCT behavior)
+            future_to_api = {
+                executor.submit(
+                    self._query_api_with_timing, api_name, query_json, api_predicates
+                ): api_name
+                for api_name in selected_apis
+            }
+
+            for future in as_completed(future_to_api):
+                api_name = future_to_api[future]
+                try:
+                    result, timing = future.result()
+                    timings.append(timing)
+                    if result and 'knowledge_graph' in result:
+                        results.append(result)
+                except Exception as e:
+                    logger.warning(f"API '{api_name}' generated exception: {e}")
+                    timings.append(APITiming(
+                        api_name=api_name,
+                        duration_seconds=0.0,
+                        success=False,
+                        edge_count=0,
+                        error=str(e),
+                    ))
+
+        # Filter results to only include those with edges (matching TCT's included_KP_ID logic)
+        valid_results = []
+        for result in results:
+            kg = result.get('knowledge_graph')
+            if kg is not None and 'edges' in kg and len(kg['edges']) > 0:
+                valid_results.append(result)
+
+        # Merge all knowledge graph edges
+        merged_edges = {}
+        for result in valid_results:
+            merged_edges.update(result['knowledge_graph']['edges'])
+
+        # Sort timings by duration (slowest first) for logging
+        timings.sort(key=lambda t: t.duration_seconds, reverse=True)
+
+        return merged_edges, timings
 
     def normalize_genes(self, gene_symbols: List[str]) -> Dict[str, str]:
         """Normalize gene symbols to CURIEs using TCT name_resolver.
@@ -208,7 +385,7 @@ class TRAPIClient:
             logger.warning(f"Disease lookup failed for '{query}': {e}")
             return []
 
-    def _resolve_curie_names(self, curies: List[str], timeout: int = 30) -> Dict[str, str]:
+    def _resolve_curie_names(self, curies: List[str], timeout: int = 60) -> Dict[str, str]:
         """Resolve CURIEs to human-readable names using Node Normalizer API.
 
         Args:
@@ -413,25 +590,27 @@ class TRAPIClient:
         for api in API_withMetaKG:
             API_predicates[api] = list(set(self.metaKG[self.metaKG["API"] == api]["Predicate"]))
 
-        # Step 5: Execute parallel queries
+        # Step 5: Execute parallel queries with timing
         if progress_callback:
             progress_callback(f"Querying {len(selected_APIs)} Translator APIs...")
 
-        logger.info(f"Querying {len(selected_APIs)} APIs in parallel (max_workers={self.max_workers})...")
+        query_start = time.time()
+        logger.info(f"Starting parallel query: {len(selected_APIs)} APIs")
 
-        query_results = translator_query.parallel_api_query(
+        query_results, api_timings = self._parallel_api_query_with_timing(
             query_json=query_json,
-            select_APIs=selected_APIs,
-            APInames=self.APInames,
-            API_predicates=API_predicates,
-            max_workers=self.max_workers
+            selected_apis=selected_APIs,
+            api_predicates=API_predicates,
         )
+
+        query_duration = time.time() - query_start
+        successful_count = sum(1 for t in api_timings if t.success)
+        logger.info(f"Parallel query completed in {query_duration:.1f}s: {len(query_results)} edges from {successful_count}/{len(api_timings)} APIs")
 
         # Step 6: Convert results to edges list with provenance
         edges = []
         edge_sources = {}  # Track which API provided each edge
         query_result_id = 0  # Assign unique ID to each query result
-        successful_apis = set()  # Track unique APIs that returned edges
 
         for k, v in query_results.items():
             if isinstance(v, dict):
@@ -451,12 +630,6 @@ class TRAPIClient:
                 # Add knowledge_source metadata if not already present
                 if 'knowledge_source' not in v:
                     v['knowledge_source'] = []
-
-                # Track successful APIs from sources field (only count aggregators we queried)
-                for source in v.get('sources', []):
-                    if isinstance(source, dict) and 'resource_id' in source:
-                        if source.get('resource_role') == 'aggregator_knowledge_source':
-                            successful_apis.add(source['resource_id'])
 
         # Step 7: Post-filter edges by predicate granularity
         # APIs may return edges with predicates we didn't request, so filter them here
@@ -557,9 +730,11 @@ class TRAPIClient:
                 "exclude_literature": exclude_literature,
                 "edges_before_filter": edges_before_filter,
                 "edges_removed": edges_removed,
+                "api_timings": [asdict(t) for t in api_timings],
+                "total_query_duration": round(query_duration, 3),
             },
             apis_queried=len(selected_APIs),
-            apis_succeeded=len(successful_apis),
+            apis_succeeded=sum(1 for t in api_timings if t.success),
         )
 
         logger.info(f"Query complete: {len(edges)} edges from {response.apis_succeeded}/{response.apis_queried} APIs")

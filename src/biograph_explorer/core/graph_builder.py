@@ -152,7 +152,9 @@ class GraphBuilder:
         logger.info(f"Created graph: {graph.number_of_nodes()} nodes, {graph.number_of_edges()} edges")
 
         # Add node attributes
-        self._add_node_attributes(graph, query_gene_curies, curie_to_label, curie_to_symbol)
+        self._add_node_attributes(
+            graph, query_gene_curies, curie_to_label, curie_to_symbol
+        )
 
         # Count categories
         node_categories = {}
@@ -223,7 +225,7 @@ class GraphBuilder:
             elif node.startswith("CHEBI:") or node.startswith("CHEMBL:"):
                 graph.nodes[node]["category"] = "ChemicalEntity"
                 graph.nodes[node]["is_query_gene"] = False
-            elif node.startswith("GO:"):
+            elif node.startswith("GO:") or node.startswith("REACT:") or node.startswith("UMLS:"):
                 graph.nodes[node]["category"] = "BiologicalProcess"
                 graph.nodes[node]["is_query_gene"] = False
             else:

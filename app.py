@@ -285,10 +285,10 @@ query_pattern = st.sidebar.radio(
     "Query Pattern",
     options=[
         "1-hop (Neighborhood Discovery)",
-        "2-hop (Gene → Intermediate → Disease)"
+        "2-hop (Gene → Intermediate → Disease)",
     ],
     index=1,  # Default to 2-hop
-    help="1-hop finds all direct connections to genes. 2-hop finds targets between genes and disease."
+    help="1-hop: direct connections. 2-hop: targets between genes and disease."
 )
 
 if query_pattern == "2-hop (Gene → Intermediate → Disease)":
@@ -311,6 +311,7 @@ if query_pattern == "2-hop (Gene → Intermediate → Disease)":
 
     if not disease_curie:
         st.sidebar.warning(":material/warning: Disease CURIE required for 2-hop queries")
+
 else:
     st.sidebar.markdown("**Path:** Gene → **[Any Connection]**")
     intermediate_types = []  # Empty for 1-hop
@@ -400,33 +401,21 @@ if run_query:
         # Step 1: Initialize clients
         status_text.text("Initializing TRAPI client...")
         progress_bar.progress(10)
-        
-        client = TRAPIClient(cache_dir=Path("data/cache"), max_workers=4)
+
+        client = TRAPIClient(cache_dir=Path("data/cache"))
         builder = GraphBuilder()
         engine = ClusteringEngine()
 
         # Convert intermediate type selections to biolink categories
-        intermediate_categories = None
-        if query_pattern == "2-hop (Gene → Intermediate → Disease)" and intermediate_types:
-            # Map UI labels to biolink categories
-            type_mapping = {
-                "Protein": "biolink:Protein",
-                "ChemicalEntity (Drugs/Metabolites)": "biolink:ChemicalEntity",
-                "PhenotypicFeature": "biolink:PhenotypicFeature",
-                "Pathway": "biolink:Pathway",
-                "BiologicalProcess": "biolink:BiologicalProcess",
-                "Gene": "biolink:Gene",
-                "AnatomicalEntity": "biolink:AnatomicalEntity",
-            }
-            intermediate_categories = [type_mapping[t] for t in intermediate_types if t in type_mapping]
-
-            # Validate disease_curie for 2-hop queries
-            if not disease_curie:
-                raise ValidationError("Disease CURIE is required for 2-hop queries")
-
-        # Step 2: Query TRAPI
-        status_text.text(f"Querying Translator APIs for {len(validated_genes)} genes...")
-        progress_bar.progress(20)
+        type_mapping = {
+            "Protein": "biolink:Protein",
+            "ChemicalEntity (Drugs/Metabolites)": "biolink:ChemicalEntity",
+            "PhenotypicFeature": "biolink:PhenotypicFeature",
+            "Pathway": "biolink:Pathway",
+            "BiologicalProcess": "biolink:BiologicalProcess",
+            "Gene": "biolink:Gene",
+            "AnatomicalEntity": "biolink:AnatomicalEntity",
+        }
 
         def progress_callback(msg):
             status_text.text(msg)
@@ -434,28 +423,53 @@ if run_query:
         # Get predicate filtering settings
         predicate_min_depth = GRANULARITY_PRESETS[predicate_preset]["min_depth"]
 
-        response = client.query_gene_neighborhood(
-            validated_genes,
-            disease_curie=disease_curie,
-            intermediate_categories=intermediate_categories,
-            predicate_min_depth=predicate_min_depth,
-            exclude_literature=exclude_literature,
-            progress_callback=progress_callback
-        )
-        
-        progress_bar.progress(60)
+        # Handle different query patterns
+        if query_pattern == "2-hop (Gene → Intermediate → Disease)" and intermediate_types:
+            # Standard 2-hop query
+            intermediate_categories = [type_mapping[t] for t in intermediate_types if t in type_mapping]
 
-        # Show query pattern used with filtering info
-        query_pattern_used = response.metadata.get("query_pattern", "unknown")
-        edges_removed = response.metadata.get("edges_removed", 0)
-        filter_info = f" (filtered {edges_removed} vague relationships)" if edges_removed > 0 else ""
+            if not disease_curie:
+                raise ValidationError("Disease CURIE is required for 2-hop queries")
 
-        if query_pattern_used == "2-hop":
+            status_text.text(f"Querying Translator APIs for {len(validated_genes)} genes...")
+            progress_bar.progress(20)
+
+            response = client.query_gene_neighborhood(
+                validated_genes,
+                disease_curie=disease_curie,
+                intermediate_categories=intermediate_categories,
+                predicate_min_depth=predicate_min_depth,
+                exclude_literature=exclude_literature,
+                progress_callback=progress_callback
+            )
+
+            progress_bar.progress(60)
+
+            edges_removed = response.metadata.get("edges_removed", 0)
+            filter_info = f" (filtered {edges_removed} vague relationships)" if edges_removed > 0 else ""
             intermediate_cats = response.metadata.get("intermediate_categories", [])
             intermediate_str = ", ".join([c.replace("biolink:", "") for c in intermediate_cats])
             st.success(f":material/check_circle: 2-hop query: Found {len(response.edges)} edges from {response.apis_succeeded}/{response.apis_queried} APIs{filter_info}")
             st.info(f":material/timeline: Query: Gene → [{intermediate_str}] → {disease_curie}")
+
         else:
+            # 1-hop neighborhood discovery
+            status_text.text(f"Querying Translator APIs for {len(validated_genes)} genes...")
+            progress_bar.progress(20)
+
+            response = client.query_gene_neighborhood(
+                validated_genes,
+                disease_curie=disease_curie,
+                intermediate_categories=None,
+                predicate_min_depth=predicate_min_depth,
+                exclude_literature=exclude_literature,
+                progress_callback=progress_callback
+            )
+
+            progress_bar.progress(60)
+
+            edges_removed = response.metadata.get("edges_removed", 0)
+            filter_info = f" (filtered {edges_removed} vague relationships)" if edges_removed > 0 else ""
             st.success(f":material/check_circle: 1-hop query: Found {len(response.edges)} edges from {response.apis_succeeded}/{response.apis_queried} APIs{filter_info}")
         
         # Step 3: Build graph
@@ -466,7 +480,12 @@ if run_query:
         curie_to_symbol = response.metadata.get("curie_to_symbol", {})
         curie_to_name = response.metadata.get("curie_to_name", {})
 
-        kg = builder.build_from_trapi_edges(response.edges, response.input_genes, curie_to_symbol, curie_to_name)
+        kg = builder.build_from_trapi_edges(
+            response.edges,
+            response.input_genes,
+            curie_to_symbol,
+            curie_to_name,
+        )
         
         # Calculate gene frequency
         gene_freq = builder.calculate_gene_frequency(kg.graph, response.input_genes)
@@ -694,13 +713,18 @@ if st.session_state.graph:
         )
 
         if viz_data:
+            # Build dynamic key that changes when cluster selection or layout changes
+            # This forces Cytoscape to re-run the layout algorithm instead of preserving old positions
+            cluster_key = selected_cluster.replace(" ", "_").replace("(", "").replace(")", "")
+            cytoscape_key = f"biograph_network_{cluster_key}_{layout}"
+
             # Render component
             streamlit_cytoscape(
                 viz_data["elements"],
                 layout=viz_data["layout"],
                 node_styles=viz_data["node_styles"],
                 edge_styles=viz_data["edge_styles"],
-                key="biograph_network"
+                key=cytoscape_key
             )
 
             st.caption("""
