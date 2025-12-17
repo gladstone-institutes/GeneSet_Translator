@@ -17,30 +17,35 @@ The goal is to discover effective workflows for transforming complex high dimens
 
 ## Key Technologies
 
-- **[TCT (Translator Component Toolkit)](https://github.com/gloriachin/Translator_component_toolkit)**: TRAPI query library
+- **[TCT (Translator Component Toolkit)](https://github.com/gloriachin/Translator_component_toolkit)**: TRAPI query library and gene normalization
 - **[NetworkX](https://networkx.org/)**: Graph analysis
 - **[python-louvain](https://github.com/taynaud/python-louvain)**: Community detection
 - **[Streamlit](https://streamlit.io/)**: Web UI
 - **[streamlit-cytoscape](https://github.com/natalie-23-gill/streamlit-cytoscape)**: Interactive Cytoscape.js visualization based on [st-link-analysis](https://github.com/AlrasheedA/st-link-analysis)
 - **[Pydantic](https://docs.pydantic.dev/)**: Data validation
+- **[Biolink Model](https://biolink.github.io/biolink-model/)**: Ontology for predicate hierarchy and type validation
 
 **Current Features (Phase 1 and 2):**
 - ✅ Gene normalization using NCATS Translator
 - ✅ Parallel TRAPI queries across 15+ Translator APIs
+- ✅ Three query patterns: 1-hop neighborhood, 2-hop to disease, 2-hop to disease BiologicalProcesses
 - ✅ NetworkX graph construction
 - ✅ Louvain community detection & centrality analysis
 - ✅ Interactive Cytoscape.js visualization with 9 layout algorithms
 - ✅ CSV import and example datasets (Alzheimer's, COVID-19)
 - ✅ Query caching for development
+- ✅ Disease name search via Node Normalizer (not just CURIE entry)
+- ✅ Predicate granularity filtering (All/Standard/Specific levels)
+- ✅ Optional predicate exclusions (literature co-occurrence, coexpression, homology)
+- ✅ BiologicalProcess-specific informative predicate filtering
+- ✅ Query gene highlighting in network view
+- ✅ Material Design icons for biological entity types
 
 **Planned Features (Phase 3):**
-- 📋 Highlight the query genes in the resulting networks
 - 📋 Node resizing in network view - currently broken
-- 📋 Better clustering algorithms - current louvain clustering is not ideal for a highly constrained network (only 1 disease node)
-- 📋 Filter results by predicate types
+- 📋 Better clustering algorithms - current Louvain clustering is not ideal for highly constrained networks
 - 📋 Session management (explicitly save/load sessions, currently just cached in a local directory)
-- 📋 Built in disease curie lookup
-- 📋 Export to Cytoscape button
+- 📋 Export to Cytoscape desktop button
 - 📋 Improved query builder (3-hop queries, gene -> [intermediate] -> disease associated phenotypes)
 - 📋 Augmenting the query results with external data sources
 - 📋 LLM cluster summarization
@@ -103,12 +108,18 @@ The app displays results in three tabs:
 
 **Query Patterns:**
 - **1-hop** (`Gene → Any`): Finds all connections to your genes (broad discovery)
-- **2-hop** (`Gene → Intermediate → Disease`): Finds intermediate nodes of slected types between genes and a disease (requires disease CURIE like `MONDO:0100096` for COVID-19)
+- **2-hop** (`Gene → Intermediate → Disease`): Finds intermediate nodes of selected types between genes and a disease (requires disease CURIE like `MONDO:0100096` for COVID-19)
+- **2-hop** (`Gene → Intermediate → Disease BiologicalProcesses`): Discovers biological processes associated with a disease that connect to your genes through intermediate entities
 
 **Key Metrics:**
 - **Gene Frequency**: How many query genes connect to each node (convergence indicator)
 - **PageRank**: Relative importance in the network
 - **Communities**: Biological modules detected by Louvain clustering
+
+**Predicate Filtering:**
+- **Granularity levels**: All Relationships, Standard (87% MetaKG coverage), Specific Only (52% coverage)
+- **Optional exclusions**: Filter out literature co-occurrence, coexpression, or homology predicates
+- **BiologicalProcess mode**: Automatically filters to informative predicates (affects, causes, disrupts, etc.)
 
 
 ## Current Limitations
@@ -139,11 +150,6 @@ make html
 poetry add <package-name>
 ```
 
-
-## Current Limitations
-
-- **Large graphs**: Networks >200 nodes are auto-sampled for visualization performance
-- **Session persistence**: Manual query re-run required or loading cached queries (auto-save coming in Phase 3)
 
 ## Troubleshooting
 
@@ -181,6 +187,6 @@ If you use BioGraph Explorer in your research:
   author = {Gill, Natalie},
   title = {BioGraph Explorer: Multi-gene TRAPI Query Integration with Network Analysis},
   year = {2025},
-  url = {https://github.com/yourusername/biograph_explorer}
+  url = {https://github.com/gladstone-institutes/biograph_explorer}
 }
 ```
