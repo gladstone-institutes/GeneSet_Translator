@@ -40,16 +40,16 @@ The goal is to discover effective workflows for transforming complex high dimens
 - ✅ BiologicalProcess-specific informative predicate filtering
 - ✅ Query gene highlighting in network view
 - ✅ Material Design icons for biological entity types
+- ✅ Node resizing in network view - currently broken
+- ✅ Improved query builder (3-hop queries, gene -> [intermediate] -> disease associated BiologicalProcess)
 
 **Planned Features (Phase 3):**
-- 📋 Node resizing in network view - currently broken
-- 📋 Better clustering algorithms - current Louvain clustering is not ideal for highly constrained networks
-- 📋 Session management (explicitly save/load sessions, currently just cached in a local directory)
-- 📋 Export to Cytoscape desktop button
-- 📋 Improved query builder (3-hop queries, gene -> [intermediate] -> disease associated phenotypes)
-- 📋 Augmenting the query results with external data sources
+
+- 📋 NodeAnnotator based annotations for intermediate nodes to improve clustering
 - 📋 LLM cluster summarization
-- 📋 RAG-powered chat interface with Claude AI with knowledge provenance subgraph display
+- 📋 Session management (explicitly save/load sessions, currently just cached in a local directory)
+- 📋 Improve export to Cytoscape 
+- 📋 Augmenting the query results with external data sources in addition to NodeAnnotator
 
 
 > **Note**: This is research software in active development. Some features are incomplete and subject to change.
