@@ -203,7 +203,19 @@ def prepare_cytoscape_elements(
         Dictionary with "nodes" and "edges" lists in Cytoscape.js format
     """
     # Get base Cytoscape format from NetworkX
-    cyto_data = json_graph.cytoscape_data(graph)
+    # First, create a copy without non-serializable or complex attributes
+    graph_copy = graph.copy()
+    # Exclude attributes that can't be JSON serialized or display poorly:
+    # - translator_node: TranslatorNode objects can't be JSON serialized
+    # - node_annotations: legacy attribute with nested dicts (replaced by annotation_features)
+    # - annotation_features: we add clean formatted version to element data instead
+    exclude_attrs = {'translator_node', 'node_annotations', 'annotation_features'}
+    for node in graph_copy.nodes():
+        for attr in exclude_attrs:
+            if attr in graph_copy.nodes[node]:
+                del graph_copy.nodes[node][attr]
+
+    cyto_data = json_graph.cytoscape_data(graph_copy)
     elements = cyto_data["elements"]
 
     # Calculate metric values for sizing
@@ -293,6 +305,23 @@ def prepare_cytoscape_elements(
         node_element["data"]["in_cluster"] = in_cluster
         # Reduce opacity for nodes from other clusters (connected but not native)
         node_element["data"]["opacity"] = 1.0 if in_cluster else 0.6
+
+        # Add annotation features as top-level fields for tooltip display
+        # Using 'ann_' prefix to avoid conflicts with existing fields
+        # Each field is a primitive (string/number) so Cytoscape.js can render it directly
+        annotation_features = node_attrs.get('annotation_features', {})
+        if annotation_features:
+            for key, value in annotation_features.items():
+                if isinstance(value, list):
+                    # Format lists as readable strings
+                    count = len(value)
+                    if count <= 3:
+                        formatted = ', '.join(str(v) for v in value)
+                    else:
+                        formatted = f"{', '.join(str(v) for v in value[:3])}... ({count} total)"
+                    node_element["data"][f"ann_{key}"] = formatted
+                else:
+                    node_element["data"][f"ann_{key}"] = value
 
     # Enrich edges with custom attributes
     for idx, edge_element in enumerate(elements["edges"]):
@@ -1018,3 +1047,111 @@ def create_clustered_graph(
         )
 
     return meta_graph
+
+
+def filter_graph_by_annotations(
+    graph: nx.DiGraph,
+    annotation_filters: Dict[str, List[Any]],
+) -> nx.DiGraph:
+    """Filter graph by annotation attributes.
+
+    Filtering strategy:
+    1. Find nodes matching ALL selected annotation criteria (AND logic)
+    2. Include only matched nodes plus disease nodes (always preserved)
+    3. Edges between included nodes are preserved
+
+    Args:
+        graph: Full NetworkX graph
+        annotation_filters: Dict of filter_key -> list of selected values.
+            Example: {"go_bp": ["cell cycle"], "go_mf": ["ATP binding"]}
+
+    Returns:
+        Filtered subgraph with 'in_filter' attribute marking matched nodes
+    """
+    if not annotation_filters:
+        return graph
+
+    # Remove empty filters
+    active_filters = {k: v for k, v in annotation_filters.items() if v}
+    if not active_filters:
+        return graph
+
+    logger.info(f"Filtering graph by annotations: {active_filters}")
+
+    # Find nodes matching ALL filters (AND logic)
+    matched_nodes = set()
+    for node in graph.nodes():
+        node_attrs = graph.nodes[node]
+        matches_all = True
+
+        for filter_key, selected_values in active_filters.items():
+            # Get node's annotation feature value for this filter
+            annotation_features = node_attrs.get('annotation_features', {})
+            node_value = annotation_features.get(filter_key)
+
+            if node_value is None:
+                matches_all = False
+                break
+
+            # Handle list-valued attributes (e.g., go_bp, go_mf, go_cc, alias)
+            if isinstance(node_value, list):
+                # Check if ANY of the node's values match ANY selected value
+                node_value_strs = {str(v) for v in node_value}
+                if not node_value_strs.intersection(selected_values):
+                    matches_all = False
+                    break
+            else:
+                # Scalar value - check for exact match
+                if str(node_value) not in selected_values:
+                    matches_all = False
+                    break
+
+        if matches_all:
+            matched_nodes.add(node)
+
+    # Always include disease nodes (they don't have GO annotations but are important)
+    disease_nodes = {
+        node for node in graph.nodes()
+        if graph.nodes[node].get('category') == 'Disease'
+    }
+
+    # Identify query genes
+    query_genes = {
+        node for node in graph.nodes()
+        if graph.nodes[node].get('is_query_gene', False)
+    }
+
+    if not matched_nodes:
+        logger.warning("No nodes match annotation filters - returning empty graph")
+        return nx.DiGraph()
+
+    # Build node set:
+    # 1. Matched nodes (intermediates that pass the filter)
+    # 2. Disease nodes (always included)
+    # 3. Query genes connected to matched nodes
+    nodes_to_include = set(matched_nodes)
+    nodes_to_include.update(disease_nodes)
+
+    # Add query genes that are connected to matched intermediate nodes
+    for node in matched_nodes:
+        for neighbor in graph.predecessors(node):
+            if neighbor in query_genes:
+                nodes_to_include.add(neighbor)
+        for neighbor in graph.successors(node):
+            if neighbor in query_genes:
+                nodes_to_include.add(neighbor)
+
+    # Create subgraph with selected nodes
+    filtered_graph = graph.subgraph(nodes_to_include).copy()
+
+    # Mark nodes for styling (matched vs connected neighbor)
+    for node in filtered_graph.nodes():
+        filtered_graph.nodes[node]['in_filter'] = node in matched_nodes
+
+    logger.info(
+        f"Annotation filter result: {len(matched_nodes)} matched nodes, "
+        f"{filtered_graph.number_of_nodes()} total nodes (with connections), "
+        f"{filtered_graph.number_of_edges()} edges"
+    )
+
+    return filtered_graph

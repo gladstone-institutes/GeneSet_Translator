@@ -12,6 +12,8 @@ Phase 2 Status: Stubs created, implementation in progress
 from .trapi_client import TRAPIClient, TRAPIResponse
 from .graph_builder import GraphBuilder, KnowledgeGraph
 from .clustering_engine import ClusteringEngine, ClusteringResults
+from .node_annotator import NodeAnnotator
+from .translator_node import TranslatorNode, TranslatorAttribute, TranslatorEdge
 
 # Phase 3 (stub)
 # from .rag_system import RAGSystem
@@ -23,4 +25,8 @@ __all__ = [
     "KnowledgeGraph",
     "ClusteringEngine",
     "ClusteringResults",
+    "NodeAnnotator",
+    "TranslatorNode",
+    "TranslatorAttribute",
+    "TranslatorEdge",
 ]

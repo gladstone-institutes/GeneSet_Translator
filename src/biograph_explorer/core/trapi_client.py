@@ -63,6 +63,16 @@ class TRAPIResponse(BaseModel):
     apis_queried: int = Field(default=0, description="Number of APIs queried")
     apis_succeeded: int = Field(default=0, description="Number of successful APIs")
 
+    # Node annotations from Node Annotator API (added after initial query)
+    node_annotations: Optional[Dict[str, Dict[str, Any]]] = Field(
+        default=None,
+        description="Node annotation features by CURIE, for filtering and display"
+    )
+    annotation_metadata: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Annotation metadata (filterable_attributes, searchable_attributes, etc.)"
+    )
+
 
 class TRAPIClient:
     """Client for querying NCATS Translator APIs using TCT library.

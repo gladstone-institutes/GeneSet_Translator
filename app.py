@@ -10,6 +10,7 @@ import logging
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 from biograph_explorer.core import TRAPIClient, GraphBuilder, ClusteringEngine
 from biograph_explorer.utils import validate_gene_list, validate_disease_curie, ValidationError
@@ -41,6 +42,10 @@ if 'selected_node' not in st.session_state:
     st.session_state.selected_node = None
 if 'disease_curie' not in st.session_state:
     st.session_state.disease_curie = None
+if 'annotation_metadata' not in st.session_state:
+    st.session_state.annotation_metadata = None
+if 'annotation_filters' not in st.session_state:
+    st.session_state.annotation_filters = {}
 
 # Title
 st.title(":material/biotech: BioGraph Explorer")
@@ -172,6 +177,43 @@ else:  # Load Cached Query
                         kg.graph.nodes[node]['gene_frequency'] = freq
 
                     progress_bar.progress(70)
+
+                    # Restore node annotations from cache OR fetch from API
+                    status_text.text("Loading node annotations...")
+                    if cached_response.node_annotations:
+                        # Restore annotations from cache
+                        for node, features in cached_response.node_annotations.items():
+                            if node in kg.graph.nodes:
+                                kg.graph.nodes[node]['annotation_features'] = features
+                        st.session_state.annotation_metadata = cached_response.annotation_metadata
+                        logger.info(f"Restored {len(cached_response.node_annotations)} annotations from cache")
+                    else:
+                        # Annotations not in cache - fetch from API
+                        try:
+                            from biograph_explorer.core import NodeAnnotator
+                            annotator = NodeAnnotator(cache_dir=Path("data/cache/annotations"))
+                            kg.graph, annotation_metadata = annotator.annotate_graph(
+                                kg.graph,
+                                fields="all",
+                                progress_callback=lambda msg: status_text.text(f"Annotating: {msg}")
+                            )
+                            st.session_state.annotation_metadata = annotation_metadata
+
+                            # Save annotations to cache for next time
+                            node_annotations = {}
+                            for node in kg.graph.nodes():
+                                features = kg.graph.nodes[node].get('annotation_features', {})
+                                if features:
+                                    node_annotations[node] = features
+                            cached_response.node_annotations = node_annotations
+                            cached_response.annotation_metadata = annotation_metadata
+                            client._cache_response(cached_response)
+                            logger.info(f"Fetched and cached {len(node_annotations)} annotations")
+                        except Exception as e:
+                            logger.warning(f"Node annotation failed (non-fatal): {e}")
+                            st.session_state.annotation_metadata = None
+
+                    progress_bar.progress(80)
 
                     # Cluster
                     status_text.text("Detecting communities...")
@@ -622,9 +664,43 @@ if run_query:
         gene_freq = builder.calculate_gene_frequency(kg.graph, response.input_genes)
         for node, freq in gene_freq.items():
             kg.graph.nodes[node]['gene_frequency'] = freq
-        
-        progress_bar.progress(80)
-        
+
+        progress_bar.progress(75)
+
+        # Step 3.5: Annotate nodes with metadata from Node Annotator API
+        status_text.text("Annotating nodes with metadata...")
+        try:
+            from biograph_explorer.core import NodeAnnotator
+            annotator = NodeAnnotator(cache_dir=Path("data/cache/annotations"))
+            kg.graph, annotation_metadata = annotator.annotate_graph(
+                kg.graph,
+                fields="all",
+                progress_callback=lambda msg: status_text.text(f"Annotating: {msg}")
+            )
+            st.session_state.annotation_metadata = annotation_metadata
+            annotated_pct = annotation_metadata.get('annotation_rate', 0) * 100
+            logger.info(f"Node annotation complete: {annotated_pct:.1f}% annotated")
+
+            # Save annotations to response for caching
+            node_annotations = {}
+            for node in kg.graph.nodes():
+                features = kg.graph.nodes[node].get('annotation_features', {})
+                if features:
+                    node_annotations[node] = features
+            response.node_annotations = node_annotations
+            response.annotation_metadata = annotation_metadata
+
+            # Re-save cache with annotations included
+            status_text.text("Saving annotations to cache...")
+            client._cache_response(response)
+            logger.info(f"Cache updated with {len(node_annotations)} node annotations")
+
+        except Exception as e:
+            logger.warning(f"Node annotation failed (non-fatal): {e}")
+            st.session_state.annotation_metadata = None
+
+        progress_bar.progress(85)
+
         # Step 4: Cluster
         status_text.text("Detecting communities...")
         results = engine.analyze_graph(kg.graph, response.input_genes)
@@ -803,8 +879,51 @@ if st.session_state.graph:
                 help="Width of edges in pixels"
             )
 
+        # Visualization controls - Row 3 (Annotation Filters)
+        # Dynamically discover filterable attributes from annotation metadata
+        if st.session_state.annotation_metadata:
+            filterable_attrs = st.session_state.annotation_metadata.get('filterable_attributes', {})
+            searchable_attrs = st.session_state.annotation_metadata.get('searchable_attributes', {})
+
+            has_filters = filterable_attrs or searchable_attrs
+            if has_filters:
+                with st.expander(":material/filter_alt: Annotation Filters", expanded=False):
+                    # Section 1: GO Term Filters (searchable multiselect)
+                    if searchable_attrs:
+                        st.markdown("**GO Term Filters**")
+                        st.caption("Filter nodes by Gene Ontology terms (nodes with ANY selected term will match)")
+
+                        go_cols = st.columns(min(3, len(searchable_attrs)))
+                        go_labels = {
+                            'go_bp': 'Biological Process',
+                            'go_mf': 'Molecular Function',
+                            'go_cc': 'Cellular Component',
+                        }
+
+                        for i, (go_key, go_values) in enumerate(searchable_attrs.items()):
+                            col_idx = i % len(go_cols)
+                            with go_cols[col_idx]:
+                                label = go_labels.get(go_key, go_key)
+                                selected_go = st.multiselect(
+                                    f"{label} ({len(go_values)} terms)",
+                                    options=go_values,
+                                    default=[],
+                                    key=f"go_filter_{go_key}",
+                                    help="Type to search. Nodes with ANY selected term will match.",
+                                    placeholder="Search GO terms..."
+                                )
+                                if selected_go:
+                                    st.session_state.annotation_filters[go_key] = selected_go
+                                elif go_key in st.session_state.annotation_filters:
+                                    del st.session_state.annotation_filters[go_key]
+
+                    # Show active filters summary
+                    active_count = sum(1 for v in st.session_state.annotation_filters.values() if v)
+                    if active_count > 0:
+                        st.caption(f":material/filter_list: {active_count} filter(s) active - connected nodes will also be shown")
+
         # Render streamlit-cytoscape visualization
-        from biograph_explorer.ui.network_viz import render_network_visualization
+        from biograph_explorer.ui.network_viz import render_network_visualization, filter_graph_by_annotations
         from streamlit_cytoscape import streamlit_cytoscape
 
         # Determine which graph to visualize based on cluster selection
@@ -851,6 +970,26 @@ if st.session_state.graph:
         else:
             display_graph = st.session_state.graph
 
+        # Apply annotation filters if any are active
+        if st.session_state.annotation_filters:
+            active_filters = {k: v for k, v in st.session_state.annotation_filters.items() if v}
+            if active_filters:
+                pre_filter_count = display_graph.number_of_nodes()
+                display_graph = filter_graph_by_annotations(
+                    display_graph,
+                    active_filters,
+                )
+                post_filter_count = display_graph.number_of_nodes()
+                if post_filter_count < pre_filter_count:
+                    matched_count = sum(
+                        1 for n in display_graph.nodes()
+                        if display_graph.nodes[n].get('in_filter', False)
+                    )
+                    st.info(
+                        f":material/filter_alt: Annotation filter: {matched_count} matched nodes + "
+                        f"{post_filter_count - matched_count} connected nodes shown"
+                    )
+
         # Prepare visualization data
         viz_data = render_network_visualization(
             display_graph,
@@ -865,10 +1004,21 @@ if st.session_state.graph:
         )
 
         if viz_data:
-            # Build dynamic key that changes when cluster selection or layout changes
+            # Build dynamic key that changes when cluster selection, layout, or filters change
             # This forces Cytoscape to re-run the layout algorithm instead of preserving old positions
             cluster_key = selected_cluster.replace(" ", "_").replace("(", "").replace(")", "")
-            cytoscape_key = f"biograph_network_{cluster_key}_{layout}"
+
+            # Include annotation filter state in key so layout re-runs when filters change
+            filter_state = st.session_state.annotation_filters
+            if filter_state:
+                # Create a deterministic hash from active filters
+                filter_items = sorted((k, tuple(sorted(v)) if isinstance(v, list) else v)
+                                      for k, v in filter_state.items() if v)
+                filter_hash = hash(tuple(filter_items)) if filter_items else 0
+            else:
+                filter_hash = 0
+
+            cytoscape_key = f"biograph_network_{cluster_key}_{layout}_{filter_hash}"
 
             # Render component
             streamlit_cytoscape(

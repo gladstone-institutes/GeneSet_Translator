@@ -10,6 +10,7 @@ All input handling, query status, and results display is implemented directly in
 from .network_viz import (
     render_network_visualization,
     sample_graph_for_visualization,
+    filter_graph_by_annotations,
     get_node_details,
     create_clustered_graph,
 )
@@ -20,6 +21,7 @@ from .network_viz import (
 __all__ = [
     "render_network_visualization",
     "sample_graph_for_visualization",
+    "filter_graph_by_annotations",
     "get_node_details",
     "create_clustered_graph",
 ]
