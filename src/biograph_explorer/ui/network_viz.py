@@ -190,6 +190,8 @@ def prepare_cytoscape_elements(
     """Convert NetworkX graph to Cytoscape.js elements format.
 
     Uses nx.cytoscape_data() as base, then enriches with custom attributes.
+    Internal styling attributes are prefixed with '_' and automatically hidden
+    by streamlit-cytoscape's infopanel (controlled via hide_underscore_attrs parameter).
 
     Args:
         graph: NetworkX DiGraph to convert
@@ -203,13 +205,18 @@ def prepare_cytoscape_elements(
         Dictionary with "nodes" and "edges" lists in Cytoscape.js format
     """
     # Get base Cytoscape format from NetworkX
-    # First, create a copy without non-serializable or complex attributes
+    # First, create a copy without non-serializable, complex, or internal attributes
     graph_copy = graph.copy()
-    # Exclude attributes that can't be JSON serialized or display poorly:
+    # Exclude attributes that shouldn't be in Cytoscape element data:
     # - translator_node: TranslatorNode objects can't be JSON serialized
     # - node_annotations: legacy attribute with nested dicts (replaced by annotation_features)
     # - annotation_features: we add clean formatted version to element data instead
-    exclude_attrs = {'translator_node', 'node_annotations', 'annotation_features'}
+    # - is_query_gene, is_disease_associated_bp: internal flags (we add prefixed versions)
+    # - curie, value: redundant with 'id'
+    exclude_attrs = {
+        'translator_node', 'node_annotations', 'annotation_features',
+        'is_query_gene', 'is_disease_associated_bp', 'curie', 'value'
+    }
     for node in graph_copy.nodes():
         for attr in exclude_attrs:
             if attr in graph_copy.nodes[node]:
@@ -238,40 +245,43 @@ def prepare_cytoscape_elements(
         normalized_metrics = {node: 0.5 for node in graph.nodes()}
 
     # Enrich nodes with custom attributes
+    # Attributes prefixed with '_' are internal styling attributes (hidden from infopanel by default)
     for node_element in elements["nodes"]:
         node_id = node_element["data"]["id"]
         node_attrs = graph.nodes[node_id]
 
-        # Add category as label (for NodeStyle matching)
+        # Add category as label (for NodeStyle matching) - internal, hidden from user
         category = node_attrs.get("category", "Other")
         node_element["data"]["label"] = category  # Used by NodeStyle for matching
+        # Also add as 'category' for user display
+        node_element["data"]["category"] = category
 
         # Add display name (for caption)
         original_symbol = node_attrs.get("original_symbol", "")
         display_label = node_attrs.get("label", node_id)
         node_element["data"]["name"] = original_symbol if original_symbol else display_label
 
-        # Add query gene flag
+        # Add query gene flag (internal - for styling)
         is_query_gene = node_attrs.get("is_query_gene", False)
-        node_element["data"]["is_query_gene"] = is_query_gene
+        node_element["data"]["_is_query_gene"] = is_query_gene
 
-        # Check if this is a disease-associated BiologicalProcess (from Stage 1 query)
+        # Check if this is a disease-associated BiologicalProcess (internal - for styling)
         is_disease_bp = node_attrs.get("is_disease_associated_bp", False)
-        node_element["data"]["is_disease_associated_bp"] = is_disease_bp
+        node_element["data"]["_is_disease_associated_bp"] = is_disease_bp
 
-        # Set shape: triangles for query genes AND disease-associated BPs (query-derived nodes)
+        # Set shape: triangles for query genes AND disease-associated BPs (internal - for styling)
         use_triangle = is_query_gene or is_disease_bp
-        node_element["data"]["node_shape"] = "triangle" if use_triangle else "ellipse"
+        node_element["data"]["_node_shape"] = "triangle" if use_triangle else "ellipse"
 
-        # Adjust icon sizing/position for triangles (icons need to be smaller and shifted down)
+        # Adjust icon sizing/position for triangles (internal - for styling)
         if use_triangle:
-            node_element["data"]["bg_width"] = "55%"
-            node_element["data"]["bg_height"] = "55%"
-            node_element["data"]["bg_position_y"] = "80%"
+            node_element["data"]["_bg_width"] = "55%"
+            node_element["data"]["_bg_height"] = "55%"
+            node_element["data"]["_bg_position_y"] = "80%"
         else:
-            node_element["data"]["bg_width"] = "70%"
-            node_element["data"]["bg_height"] = "70%"
-            node_element["data"]["bg_position_y"] = "50%"
+            node_element["data"]["_bg_width"] = "70%"
+            node_element["data"]["_bg_height"] = "70%"
+            node_element["data"]["_bg_position_y"] = "50%"
 
         # Calculate node size
         if use_metric_sizing:
@@ -288,25 +298,25 @@ def prepare_cytoscape_elements(
         if use_triangle:
             node_size = max(node_size * 1.1, base_node_size)
 
-        node_element["data"]["size"] = round(node_size, 1)
+        node_element["data"]["_size"] = round(node_size, 1)
 
-        # Calculate font size proportional to node size (8-14px range)
+        # Calculate font size proportional to node size (internal - for styling)
         font_size = max(8, min(14, round(node_size * 0.25)))
-        node_element["data"]["font_size"] = font_size
+        node_element["data"]["_font_size"] = font_size
 
-        # Add metrics for tooltip/inspection
+        # Add metrics for tooltip/inspection (user-facing)
         node_element["data"]["gene_frequency"] = node_attrs.get("gene_frequency", 0)
         node_element["data"]["pagerank"] = node_attrs.get("pagerank", 0)
         node_element["data"]["betweenness"] = node_attrs.get("betweenness", 0)
         node_element["data"]["degree"] = graph.degree(node_id)
 
-        # Add cluster membership flag (for opacity styling when viewing individual clusters)
+        # Add cluster membership flag (internal - for opacity styling)
         in_cluster = node_attrs.get("in_cluster", True)
-        node_element["data"]["in_cluster"] = in_cluster
-        # Reduce opacity for nodes from other clusters (connected but not native)
-        node_element["data"]["opacity"] = 1.0 if in_cluster else 0.6
+        node_element["data"]["_in_cluster"] = in_cluster
+        # Reduce opacity for nodes from other clusters (internal - for styling)
+        node_element["data"]["_opacity"] = 1.0 if in_cluster else 0.6
 
-        # Add annotation features as top-level fields for tooltip display
+        # Add annotation features as top-level fields for tooltip display (user-facing)
         # Using 'ann_' prefix to avoid conflicts with existing fields
         # Each field is a primitive (string/number) so Cytoscape.js can render it directly
         annotation_features = node_attrs.get('annotation_features', {})
@@ -324,22 +334,25 @@ def prepare_cytoscape_elements(
                     node_element["data"][f"ann_{key}"] = value
 
     # Enrich edges with custom attributes
+    # Attributes prefixed with '_' are internal styling attributes (hidden from infopanel by default)
     for idx, edge_element in enumerate(elements["edges"]):
         source = edge_element["data"]["source"]
         target = edge_element["data"]["target"]
 
-        # Add unique ID for streamlit-cytoscape (REQUIRED)
+        # Add unique ID for streamlit-cytoscape (REQUIRED by Cytoscape.js)
+        # Note: 'id' must remain unprefixed as it's a structural requirement, not just display
         edge_element["data"]["id"] = f"e{idx}"
 
         # Get edge data from graph
         if graph.has_edge(source, target):
             edge_attrs = graph[source][target]
 
-            # Add predicate (cleaned) - always show
+            # Add predicate (cleaned) as label - user-facing
             predicate = edge_attrs.get("predicate", "")
             edge_element["data"]["label"] = predicate.replace("biolink:", "")
+            # Store full predicate as internal (redundant with label)
             if predicate:
-                edge_element["data"]["predicate"] = predicate
+                edge_element["data"]["_predicate"] = predicate
 
             # Add full sources information (formatted as readable strings)
             sources = edge_attrs.get("sources", [])
@@ -485,24 +498,28 @@ def prepare_cytoscape_elements(
                 if qualified_predicate and object_direction and object_aspect:
                     edge_element["data"]["qualified_relationship"] = f"{qualified_predicate} {object_direction} {object_aspect}"
 
-            # Add complete attributes array (formatted as readable text)
+            # Add complete attributes array (formatted as readable text) - internal/debug
             attributes = edge_attrs.get("attributes", [])
             if attributes:
                 # Format attributes using helper function
                 attributes_text = _flatten_attributes_for_display(attributes)
                 if attributes_text:  # Only add if non-empty
-                    edge_element["data"]["attributes"] = "; ".join(attributes_text)
+                    edge_element["data"]["_attributes"] = "; ".join(attributes_text)
 
-            # Add query_result_id only if present
+            # Add query_result_id only if present - internal
             query_result_id = edge_attrs.get("query_result_id")
             if query_result_id is not None:
-                edge_element["data"]["query_result_id"] = query_result_id
+                edge_element["data"]["_query_result_id"] = query_result_id
 
-        # Add edge width and scaled font size
-        edge_element["data"]["edge_width"] = edge_width
+        # Add edge width and scaled font size - internal styling
+        edge_element["data"]["_edge_width"] = edge_width
         # Scale font: 8px at width 1, up to 14px at width 10
         edge_font_size = max(8, min(14, 6 + edge_width))
-        edge_element["data"]["edge_font_size"] = edge_font_size
+        edge_element["data"]["_edge_font_size"] = edge_font_size
+
+    # Note: Internal styling attributes are prefixed with '_' and automatically
+    # hidden by streamlit-cytoscape's infopanel (hide_underscore_attrs=True by default).
+    # The debug_mode parameter can be passed to streamlit_cytoscape() to control this.
 
     return {"nodes": elements["nodes"], "edges": elements["edges"]}
 
@@ -535,8 +552,9 @@ def create_node_styles(graph: nx.DiGraph) -> List["NodeStyle"]:
         # Use "name" as caption (displays gene symbol or node label)
         # custom_styles reads size from node data for dynamic sizing
         # Label styling: dynamic font size + background box for visibility
+        # Note: Internal styling attributes use underscore prefix (e.g., _size, _node_shape)
         label_styles = {
-            "font-size": "data(font_size)",
+            "font-size": "data(_font_size)",
             "text-background-color": "#ffffff",
             "text-background-opacity": 0.95,
             "text-background-padding": "2px",
@@ -551,13 +569,13 @@ def create_node_styles(graph: nx.DiGraph) -> List["NodeStyle"]:
                     caption="name",
                     icon=icon,
                     custom_styles={
-                        "width": "data(size)",
-                        "height": "data(size)",
-                        "shape": "data(node_shape)",
-                        "background-width": "data(bg_width)",
-                        "background-height": "data(bg_height)",
-                        "background-position-y": "data(bg_position_y)",
-                        "opacity": "data(opacity)",
+                        "width": "data(_size)",
+                        "height": "data(_size)",
+                        "shape": "data(_node_shape)",
+                        "background-width": "data(_bg_width)",
+                        "background-height": "data(_bg_height)",
+                        "background-position-y": "data(_bg_position_y)",
+                        "opacity": "data(_opacity)",
                         **label_styles,
                     }
                 )
@@ -569,10 +587,10 @@ def create_node_styles(graph: nx.DiGraph) -> List["NodeStyle"]:
                     color=color,
                     caption="name",
                     custom_styles={
-                        "width": "data(size)",
-                        "height": "data(size)",
-                        "shape": "data(node_shape)",
-                        "opacity": "data(opacity)",
+                        "width": "data(_size)",
+                        "height": "data(_size)",
+                        "shape": "data(_node_shape)",
+                        "opacity": "data(_opacity)",
                         **label_styles,
                     }
                 )
@@ -601,9 +619,10 @@ def create_edge_styles(graph: nx.DiGraph) -> List["EdgeStyle"]:
             predicates.add(predicate)
 
     # Edge styling: dynamic width and font size
+    # Note: Internal styling attributes use underscore prefix
     edge_custom_styles = {
-        "width": "data(edge_width)",
-        "font-size": "data(edge_font_size)",
+        "width": "data(_edge_width)",
+        "font-size": "data(_edge_font_size)",
     }
 
     # Create EdgeStyle for each predicate

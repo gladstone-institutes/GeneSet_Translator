@@ -46,6 +46,8 @@ if 'annotation_metadata' not in st.session_state:
     st.session_state.annotation_metadata = None
 if 'annotation_filters' not in st.session_state:
     st.session_state.annotation_filters = {}
+if 'debug_mode' not in st.session_state:
+    st.session_state.debug_mode = False
 
 # Title
 st.title(":material/biotech: BioGraph Explorer")
@@ -457,6 +459,14 @@ run_query = st.sidebar.button(
 
 if len(genes) > 0:
     st.sidebar.markdown(f"**Ready to query:** {len(genes)} genes")
+
+# Debug mode toggle
+st.sidebar.markdown("---")
+st.sidebar.checkbox(
+    "Debug mode",
+    key="debug_mode",
+    help="Show all node/edge attributes including internal styling data"
+)
 
 # Main area
 if not run_query and not st.session_state.graph:
@@ -1021,12 +1031,14 @@ if st.session_state.graph:
             cytoscape_key = f"biograph_network_{cluster_key}_{layout}_{filter_hash}"
 
             # Render component
+            # When debug_mode is True, show all attributes (hide_underscore_attrs=False)
             streamlit_cytoscape(
                 viz_data["elements"],
                 layout=viz_data["layout"],
                 node_styles=viz_data["node_styles"],
                 edge_styles=viz_data["edge_styles"],
-                key=cytoscape_key
+                key=cytoscape_key,
+                hide_underscore_attrs=not st.session_state.debug_mode
             )
 
             st.caption("""
