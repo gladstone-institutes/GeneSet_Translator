@@ -1170,3 +1170,69 @@ def filter_graph_by_category(
     )
 
     return filtered_graph
+
+
+def filter_graph_by_publication(
+    graph: nx.DiGraph,
+    selected_publication: str,
+    query_genes: List[str],
+    disease_curie: Optional[str] = None,
+) -> nx.DiGraph:
+    """Filter graph to show only edges with the selected publication.
+
+    Strategy:
+    1. Find all edges that have the selected publication in their publications list
+    2. Include nodes connected by these edges
+    3. Always include all query genes (even if disconnected after filtering)
+    4. Always include disease node if present
+    5. Remove edges that don't have the selected publication
+
+    Args:
+        graph: Full NetworkX graph
+        selected_publication: Publication ID to filter by (e.g., "PMID:12345")
+        query_genes: Query gene CURIEs (always included)
+        disease_curie: Optional disease CURIE (always included if present)
+
+    Returns:
+        Filtered subgraph with only edges containing the selected publication
+    """
+    from biograph_explorer.utils.publication_utils import normalize_publication_id
+
+    if not selected_publication:
+        return graph
+
+    normalized_pub = normalize_publication_id(selected_publication)
+    if not normalized_pub:
+        return graph
+
+    query_gene_set = set(query_genes) if query_genes else set()
+    nodes_to_include = set(query_gene_set)
+
+    if disease_curie and disease_curie in graph:
+        nodes_to_include.add(disease_curie)
+
+    # Find edges with this publication
+    edges_to_keep = []
+    for u, v, data in graph.edges(data=True):
+        pubs = data.get('publications', []) or []
+        normalized_pubs = [normalize_publication_id(p) for p in pubs if p]
+        if normalized_pub in normalized_pubs:
+            edges_to_keep.append((u, v))
+            nodes_to_include.add(u)
+            nodes_to_include.add(v)
+
+    # Create filtered subgraph with all relevant nodes
+    filtered_graph = graph.subgraph(nodes_to_include).copy()
+
+    # Remove edges that don't have the selected publication
+    edges_in_subgraph = list(filtered_graph.edges())
+    for edge in edges_in_subgraph:
+        if edge not in edges_to_keep:
+            filtered_graph.remove_edge(*edge)
+
+    logger.info(
+        f"Publication filter '{selected_publication}': {filtered_graph.number_of_nodes()} nodes, "
+        f"{len(edges_to_keep)} edges with publication"
+    )
+
+    return filtered_graph

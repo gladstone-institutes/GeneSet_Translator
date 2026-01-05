@@ -303,6 +303,19 @@ else:  # Load Cached Query
                     st.session_state.response = cached_response
                     st.session_state.disease_curie = cached_response.target_disease
 
+                    # Validate publication extraction (detect edge collisions)
+                    from biograph_explorer.utils.publication_utils import validate_publication_extraction
+                    pub_validation = validate_publication_extraction(cached_response.edges)
+                    st.session_state.pub_validation = pub_validation
+                    if pub_validation["has_issues"]:
+                        notify(
+                            f"Edge collisions detected: {pub_validation['edges_lost_to_collisions']} edges lost, "
+                            f"{pub_validation['publications_at_risk']} publications at risk. "
+                            f"See Query Log for details.",
+                            msg_type="warning",
+                            icon="warning"
+                        )
+
                     progress_bar.progress(100)
                     status_text.text(":material/check_circle: Cache loaded successfully!")
 
@@ -795,6 +808,19 @@ if run_query:
         progress_bar.progress(100)
         status_text.markdown(":material/check_circle: Analysis complete!")
 
+        # Validate publication extraction (detect edge collisions)
+        from biograph_explorer.utils.publication_utils import validate_publication_extraction
+        pub_validation = validate_publication_extraction(response.edges)
+        st.session_state.pub_validation = pub_validation
+        if pub_validation["has_issues"]:
+            notify(
+                f"Edge collisions detected: {pub_validation['edges_lost_to_collisions']} edges lost, "
+                f"{pub_validation['publications_at_risk']} publications at risk. "
+                f"See Query Log for details.",
+                msg_type="warning",
+                icon="warning"
+            )
+
         # Show category mismatch warning if applicable
         category_stats = response.metadata.get("category_mismatch_stats", {})
         if category_stats.get("mismatched_count", 0) > 0:
@@ -861,6 +887,55 @@ if st.session_state.graph:
         else:
             st.info("No node category data available")
 
+        # Publication Evidence section
+        st.subheader("Publication Evidence")
+        if st.session_state.graph and st.session_state.graph.number_of_edges() > 0:
+            from biograph_explorer.utils.publication_utils import (
+                get_publication_frequency,
+                format_publication_display,
+            )
+
+            pub_freq = get_publication_frequency(st.session_state.graph)
+
+            if pub_freq:
+                # Get top 10 publications by frequency
+                top_pubs = sorted(pub_freq.items(), key=lambda x: x[1], reverse=True)[:10]
+
+                # Create DataFrame for horizontal bar chart
+                pub_df = pd.DataFrame([
+                    {
+                        "Publication": format_publication_display(pub_id),
+                        "Edge Count": count,
+                    }
+                    for pub_id, count in top_pubs
+                ])
+
+                st.caption(f"Top {len(top_pubs)} Most Cited Publications")
+                import altair as alt
+                chart = alt.Chart(pub_df).mark_bar().encode(
+                    x=alt.X('Edge Count:Q', title='Edge Count', axis=alt.Axis(tickMinStep=1)),
+                    y=alt.Y('Publication:N', sort='-x', title=None),
+                    tooltip=['Publication', 'Edge Count']
+                ).properties(
+                    height=min(300, len(top_pubs) * 30)
+                )
+                st.altair_chart(chart, use_container_width=True)
+
+                # Summary metrics
+                col_pub1, col_pub2 = st.columns(2)
+                with col_pub1:
+                    st.metric("Unique Publications", len(pub_freq), border=True)
+                with col_pub2:
+                    edges_with_pubs = sum(
+                        1 for u, v in st.session_state.graph.edges()
+                        if st.session_state.graph[u][v].get('publications')
+                    )
+                    st.metric("Edges with Publications", edges_with_pubs, border=True)
+            else:
+                st.info("No publication data found in edges")
+        else:
+            st.info("No graph data available for publication analysis")
+
         # Query Details and Download
         st.subheader("Query Details")
         if st.session_state.response:
@@ -907,6 +982,52 @@ if st.session_state.graph:
                     st.markdown(f"**Actual:** {detail['actual']}")
                     st.caption("This may be due to knowledge providers conflating similar entity types (e.g., Gene/Protein).")
 
+            # Publication extraction debug details (if issues exist)
+            if st.session_state.get('pub_validation') and st.session_state.pub_validation.get('has_issues'):
+                pub_val = st.session_state.pub_validation
+                with st.expander("Edge Collision Debug Details", expanded=True):
+                    st.markdown("**⚠️ Publication loss due to DiGraph edge collisions**")
+                    st.markdown(
+                        "NetworkX DiGraph only stores ONE edge between any two nodes. "
+                        "When multiple TRAPI edges exist between the same node pair (with different predicates), "
+                        "only the last edge is kept, and publications from earlier edges are lost."
+                    )
+
+                    # Summary stats
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Raw TRAPI Edges", pub_val.get('total_edges', 0))
+                    with col2:
+                        st.metric("Unique Node Pairs", pub_val.get('unique_node_pairs', 0))
+                    with col3:
+                        st.metric("Edges Lost", pub_val.get('edges_lost_to_collisions', 0))
+
+                    pubs_at_risk = pub_val.get('publications_at_risk', 0)
+                    if pubs_at_risk > 0:
+                        st.warning(f"**{pubs_at_risk} publications** are on edges that were overwritten")
+
+                    # Show sample collisions
+                    samples = pub_val.get('sample_collisions', [])
+                    if samples:
+                        st.markdown("---")
+                        st.markdown("**Sample edge collisions with publication loss:**")
+                        for i, sample in enumerate(samples, 1):
+                            with st.container(border=True):
+                                st.markdown(f"**Collision {i}:** `{sample['subject']}` → `{sample['object']}`")
+                                st.markdown(f"**{sample['edge_count']} edges** compete for this node pair:")
+
+                                for pub_info in sample.get('pubs_by_edge', []):
+                                    st.markdown(f"- {pub_info}")
+
+                                st.markdown(f"**Kept:** `{sample['kept_predicate']}`")
+                                if sample.get('kept_pubs'):
+                                    st.markdown(f"**Kept publications:** {', '.join(sample['kept_pubs'])}")
+
+                    st.caption(
+                        "**Solution:** Migrate from DiGraph to MultiDiGraph to preserve all edges, "
+                        "or implement edge merging to combine publications from duplicate edges."
+                    )
+
             # Then success messages
             for msg in messages_by_type["success"]:
                 st.success(f":material/{msg['icon']}: {msg['message']}")
@@ -921,6 +1042,7 @@ if st.session_state.graph:
             if st.button(":material/delete: Clear Query Log", key="clear_query_log"):
                 st.session_state.query_messages = []
                 st.session_state.category_mismatch_detail = None
+                st.session_state.pub_validation = None
                 st.rerun()
         else:
             st.caption("No query messages to display")
@@ -929,7 +1051,7 @@ if st.session_state.graph:
         st.markdown("#### Knowledge Graph Visualization")
 
         # Visualization controls - Row 1
-        col1, col2, col3, col4 = st.columns([2, 2, 2, 2])
+        col1, col2, col3, col4, col5 = st.columns([2, 2, 2, 2, 2])
 
         with col1:
             sizing_metric = st.selectbox(
@@ -998,10 +1120,58 @@ if st.session_state.graph:
                 help="Filter to show only intermediates of a specific type"
             )
 
-        # Visualization controls - Row 2 (Node sizing)
-        col5, col6, col7 = st.columns([2, 2, 4])
-
         with col5:
+            # Publication filter dropdown
+            from biograph_explorer.utils.publication_utils import (
+                get_publication_frequency,
+                format_publication_display,
+            )
+
+            if st.session_state.graph:
+                pub_freq = get_publication_frequency(st.session_state.graph)
+                if pub_freq:
+                    # Sort by frequency (descending)
+                    sorted_pubs = sorted(pub_freq.items(), key=lambda x: x[1], reverse=True)
+                    # Format: "PMID 12345 (7 edges)"
+                    pub_options = [
+                        f"{format_publication_display(pub_id)} ({count} edges)"
+                        for pub_id, count in sorted_pubs
+                    ]
+                    # Keep raw IDs for filtering
+                    pub_ids = [pub_id for pub_id, _ in sorted_pubs]
+                else:
+                    pub_options = []
+                    pub_ids = []
+            else:
+                pub_options = []
+                pub_ids = []
+
+            if pub_options:
+                pub_filter_display = st.selectbox(
+                    "Filter by Publication",
+                    options=["All Publications"] + pub_options,
+                    index=0,
+                    help="Show only edges citing this publication"
+                )
+                # Extract raw pub_id from selection
+                if pub_filter_display != "All Publications":
+                    pub_filter_idx = pub_options.index(pub_filter_display)
+                    pub_filter = pub_ids[pub_filter_idx]
+                else:
+                    pub_filter = None
+            else:
+                pub_filter = None
+                st.selectbox(
+                    "Filter by Publication",
+                    options=["No publications available"],
+                    disabled=True,
+                    help="No publication metadata found in current graph"
+                )
+
+        # Visualization controls - Row 2 (Node sizing)
+        col6, col7, col8 = st.columns([2, 2, 4])
+
+        with col6:
             base_node_size = st.slider(
                 "Base Node Size",
                 min_value=10,
@@ -1011,14 +1181,14 @@ if st.session_state.graph:
                 help="Base size for all nodes in pixels"
             )
 
-        with col6:
+        with col7:
             use_metric_sizing = st.checkbox(
                 "Use Metric-Based Sizing",
                 value=True,
                 help="When enabled, node sizes vary by the selected metric. When disabled, all nodes are the same size."
             )
 
-        with col7:
+        with col8:
             edge_width = st.slider(
                 "Edge Width",
                 min_value=1,
@@ -1072,7 +1242,7 @@ if st.session_state.graph:
                         st.caption(f":material/filter_list: {active_count} filter(s) active - connected nodes will also be shown")
 
         # Render streamlit-cytoscape visualization
-        from biograph_explorer.ui.network_viz import render_network_visualization, filter_graph_by_annotations, filter_graph_by_category
+        from biograph_explorer.ui.network_viz import render_network_visualization, filter_graph_by_annotations, filter_graph_by_category, filter_graph_by_publication
         from streamlit_cytoscape import streamlit_cytoscape
 
         display_graph = st.session_state.graph
@@ -1123,6 +1293,21 @@ if st.session_state.graph:
                 gene_suffix = f" + {connected_query_gene_count} connected query genes" if connected_query_gene_count > 0 else ""
                 st.info(f":material/category: Showing {category_intermediate_count} {category_filter} intermediates{gene_suffix}")
 
+        # Apply publication filter if selected
+        if pub_filter:
+            pre_pub_count = display_graph.number_of_edges()
+            display_graph = filter_graph_by_publication(
+                display_graph,
+                pub_filter,
+                st.session_state.query_genes,
+                st.session_state.disease_curie
+            )
+            post_pub_count = display_graph.number_of_edges()
+            st.info(
+                f":material/description: Publication filter: {post_pub_count} edges citing "
+                f"{format_publication_display(pub_filter)}"
+            )
+
         # Prepare visualization data
         viz_data = render_network_visualization(
             display_graph,
@@ -1150,7 +1335,8 @@ if st.session_state.graph:
             else:
                 filter_hash = 0
 
-            cytoscape_key = f"biograph_network_{layout}_{filter_hash}_{category_filter}"
+            pub_filter_hash = hash(pub_filter) if pub_filter else 0
+            cytoscape_key = f"biograph_network_{layout}_{filter_hash}_{category_filter}_{pub_filter_hash}"
 
             # Render component
             # When debug_mode is True, show all attributes (hide_underscore_attrs=False)

@@ -18,6 +18,12 @@ from .biolink_predicates import (
     get_predicate_depths,
     get_predicate_info,
 )
+from .publication_utils import (
+    get_publication_frequency,
+    normalize_publication_id,
+    format_publication_display,
+    validate_publication_extraction,
+)
 
 __all__ = [
     "validate_gene_list",
@@ -35,4 +41,8 @@ __all__ = [
     "get_excluded_predicates_for_display",
     "get_predicate_depths",
     "get_predicate_info",
+    "get_publication_frequency",
+    "normalize_publication_id",
+    "format_publication_display",
+    "validate_publication_extraction",
 ]
