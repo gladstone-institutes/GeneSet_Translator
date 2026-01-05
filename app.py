@@ -8,6 +8,7 @@ from pathlib import Path
 import pandas as pd
 import logging
 import json
+from datetime import datetime
 from typing import Dict, Any
 
 # Configure logging
@@ -20,6 +21,36 @@ from biograph_explorer.utils.biolink_predicates import (
     GRANULARITY_PRESETS,
     get_allowed_predicates_for_display,
 )
+
+
+def notify(message: str, msg_type: str = "info", icon: str = None):
+    """Show toast notification and persist to session state for Overview tab.
+
+    Args:
+        message: The message text
+        msg_type: One of "success", "info", "warning", "error"
+        icon: Optional material icon name (without :material/: wrapper)
+    """
+    default_icons = {
+        "success": "check_circle",
+        "info": "info",
+        "warning": "warning",
+        "error": "error",
+    }
+    icon = icon or default_icons.get(msg_type, "info")
+
+    # Show toast
+    st.toast(message, icon=f":material/{icon}:")
+
+    # Persist to session state
+    if 'query_messages' not in st.session_state:
+        st.session_state.query_messages = []
+    st.session_state.query_messages.append({
+        "type": msg_type,
+        "message": message,
+        "timestamp": datetime.now(),
+        "icon": icon,
+    })
 
 
 def _build_query_export(response) -> Dict[str, Any]:
@@ -95,10 +126,14 @@ if 'annotation_filters' not in st.session_state:
     st.session_state.annotation_filters = {}
 if 'debug_mode' not in st.session_state:
     st.session_state.debug_mode = False
+if 'query_messages' not in st.session_state:
+    st.session_state.query_messages = []
+if 'category_mismatch_detail' not in st.session_state:
+    st.session_state.category_mismatch_detail = None
 
 # Title
-st.title(":material/biotech: BioGraph Explorer")
-st.markdown("Multi-gene TRAPI query integration with NetworkX clustering and visualization")
+st.markdown("### :material/biotech: BioGraph Explorer")
+st.caption("Multi-gene TRAPI query integration with NetworkX clustering and visualization")
 
 # Sidebar: Input Configuration
 st.sidebar.header(":material/input: Input Configuration")
@@ -543,6 +578,10 @@ if not run_query and not st.session_state.graph:
 
 # Execute query
 if run_query:
+    # Clear previous query messages
+    st.session_state.query_messages = []
+    st.session_state.category_mismatch_detail = None
+
     try:
         # Validate input
         validated_genes = validate_gene_list(genes, min_genes=1, max_genes=50)
@@ -603,9 +642,9 @@ if run_query:
                     most_recent = cached_bp_results[0]
                     try:
                         bp_curies, bp_metadata = client.load_cached_disease_bp_results(most_recent['path'])
-                        st.info(f":material/cached: Using cached BiologicalProcesses: {len(bp_curies)} BPs from {most_recent['timestamp_str']}")
+                        notify(f"Using cached BiologicalProcesses: {len(bp_curies)} BPs from {most_recent['timestamp_str']}", "info", "cached")
                     except Exception as e:
-                        st.warning(f":material/warning: Could not load cached BPs: {e}. Running fresh discovery...")
+                        notify(f"Could not load cached BPs: {e}. Running fresh discovery...", "warning")
                         bp_curies = None
                         bp_metadata = None
 
@@ -634,15 +673,15 @@ if run_query:
             edges_after = stage1_meta.get("total_edges_after_filter", 0)
 
             if edges_before > 0 and filter_bp_predicates:
-                st.info(f":material/filter_alt: Stage 1: Found {bp_count} BiologicalProcesses (filtered {edges_before} → {edges_after} edges)")
+                notify(f"Stage 1: Found {bp_count} BiologicalProcesses (filtered {edges_before} -> {edges_after} edges)", "info", "filter_alt")
 
             edges_removed = response.metadata.get("edges_removed", 0)
             filter_info = f" (filtered {edges_removed} vague relationships)" if edges_removed > 0 else ""
             intermediate_cats = response.metadata.get("intermediate_categories", [])
             intermediate_str = ", ".join([c.replace("biolink:", "") for c in intermediate_cats])
 
-            st.success(f":material/check_circle: 2-hop query: Found {len(response.edges)} edges from {response.apis_succeeded}/{response.apis_queried} APIs{filter_info}")
-            st.info(f":material/timeline: Query: Gene → [{intermediate_str}] → {bp_count} Disease BiologicalProcesses")
+            notify(f"2-hop query: Found {len(response.edges)} edges from {response.apis_succeeded}/{response.apis_queried} APIs{filter_info}", "success")
+            notify(f"Query: Gene -> [{intermediate_str}] -> {bp_count} Disease BiologicalProcesses", "info", "timeline")
 
         elif query_pattern == "2-hop (Gene → Intermediate → Disease)" and intermediate_types:
             # Standard 2-hop query
@@ -671,8 +710,8 @@ if run_query:
             filter_info = f" (filtered {edges_removed} vague relationships)" if edges_removed > 0 else ""
             intermediate_cats = response.metadata.get("intermediate_categories", [])
             intermediate_str = ", ".join([c.replace("biolink:", "") for c in intermediate_cats])
-            st.success(f":material/check_circle: 2-hop query: Found {len(response.edges)} edges from {response.apis_succeeded}/{response.apis_queried} APIs{filter_info}")
-            st.info(f":material/timeline: Query: Gene → [{intermediate_str}] → {disease_curie}")
+            notify(f"2-hop query: Found {len(response.edges)} edges from {response.apis_succeeded}/{response.apis_queried} APIs{filter_info}", "success")
+            notify(f"Query: Gene -> [{intermediate_str}] -> {disease_curie}", "info", "timeline")
 
         else:
             # 1-hop neighborhood discovery
@@ -694,8 +733,8 @@ if run_query:
 
             edges_removed = response.metadata.get("edges_removed", 0)
             filter_info = f" (filtered {edges_removed} vague relationships)" if edges_removed > 0 else ""
-            st.success(f":material/check_circle: 1-hop query: Found {len(response.edges)} edges from {response.apis_succeeded}/{response.apis_queried} APIs{filter_info}")
-        
+            notify(f"1-hop query: Found {len(response.edges)} edges from {response.apis_succeeded}/{response.apis_queried} APIs{filter_info}", "success")
+
         # Step 3: Build graph
         status_text.text("Building knowledge graph...")
         progress_bar.progress(70)
@@ -787,19 +826,19 @@ if run_query:
             actual_str = ", ".join([f"{k.replace('biolink:', '')}: {v}" for k, v in actual_counts.items()])
             requested_str = ", ".join([r.replace("biolink:", "") for r in requested])
 
-            st.warning(
-                f"**Category mismatch detected:** {mismatch_count}/{total_count} intermediate nodes "
-                f"don't match requested categories.\n\n"
-                f"**Requested:** {requested_str}  \n"
-                f"**Actual:** {actual_str}\n\n"
-                f"This may be due to knowledge providers conflating similar entity types (e.g., Gene/Protein).",
-                icon=":material/warning:"
-            )
+            # Short toast + store detail for Overview tab
+            notify(f"Category mismatch: {mismatch_count}/{total_count} intermediates don't match requested categories", "warning")
+            st.session_state.category_mismatch_detail = {
+                "mismatch_count": mismatch_count,
+                "total_count": total_count,
+                "requested": requested_str,
+                "actual": actual_str,
+            }
 
     except ValidationError as e:
-        st.error(f"Validation error: {e}")
+        notify(f"Validation error: {e}", "error")
     except Exception as e:
-        st.error(f"Error during query: {e}")
+        notify(f"Error during query: {e}", "error")
         import traceback
         st.code(traceback.format_exc())
 
@@ -811,7 +850,7 @@ if st.session_state.graph:
     tab_network, tab_overview, tab_communities = st.tabs([":material/hub: Network", ":material/analytics: Overview", ":material/group_work: Communities"])
 
     with tab_overview:
-        st.header("Analysis Overview")
+        st.markdown("#### Analysis Overview")
         
         # Key metrics
         col1, col2, col3, col4 = st.columns(4)
@@ -876,8 +915,51 @@ if st.session_state.graph:
         else:
             st.info("No query data available")
 
+        # Query Log section - display persisted messages
+        st.subheader("Query Log")
+
+        if st.session_state.query_messages:
+            # Group messages by type for organized display
+            messages_by_type = {"error": [], "warning": [], "success": [], "info": []}
+            for msg in st.session_state.query_messages:
+                messages_by_type[msg["type"]].append(msg)
+
+            # Display errors first (most important)
+            for msg in messages_by_type["error"]:
+                st.error(f":material/{msg['icon']}: {msg['message']}")
+
+            # Then warnings
+            for msg in messages_by_type["warning"]:
+                st.warning(f":material/{msg['icon']}: {msg['message']}")
+
+            # Category mismatch detail (if exists)
+            if st.session_state.category_mismatch_detail:
+                detail = st.session_state.category_mismatch_detail
+                with st.expander("Category Mismatch Details"):
+                    st.markdown(f"**Requested:** {detail['requested']}")
+                    st.markdown(f"**Actual:** {detail['actual']}")
+                    st.caption("This may be due to knowledge providers conflating similar entity types (e.g., Gene/Protein).")
+
+            # Then success messages
+            for msg in messages_by_type["success"]:
+                st.success(f":material/{msg['icon']}: {msg['message']}")
+
+            # Finally info messages in an expander (less critical)
+            if messages_by_type["info"]:
+                with st.expander(f"Info Messages ({len(messages_by_type['info'])})", expanded=False):
+                    for msg in messages_by_type["info"]:
+                        st.info(f":material/{msg['icon']}: {msg['message']}")
+
+            # Clear button
+            if st.button(":material/delete: Clear Query Log", key="clear_query_log"):
+                st.session_state.query_messages = []
+                st.session_state.category_mismatch_detail = None
+                st.rerun()
+        else:
+            st.caption("No query messages to display")
+
     with tab_network:
-        st.header("Knowledge Graph Visualization")
+        st.markdown("#### Knowledge Graph Visualization")
 
         # Visualization controls - Row 1
         col1, col2, col3, col4 = st.columns([2, 2, 2, 2])
@@ -1139,7 +1221,7 @@ if st.session_state.graph:
             st.error("Failed to render visualization")
     
     with tab_communities:
-        st.header("Community Detection Results")
+        st.markdown("#### Community Detection Results")
         
         st.write(f"Detected **{st.session_state.clustering_results.num_communities} communities** using Louvain algorithm")
         st.write(f"Modularity: **{st.session_state.clustering_results.modularity:.3f}**")
