@@ -222,6 +222,17 @@ def prepare_cytoscape_elements(
             if attr in graph_copy.nodes[node]:
                 del graph_copy.nodes[node][attr]
 
+    # Exclude edge attributes that will be replaced with formatted versions
+    # These raw arrays/dicts would display as [object Object] in the info panel
+    edge_exclude_attrs = {
+        'attributes', 'sources', 'qualifiers', 'confidence_scores',
+        'sentences', 'publications', 'knowledge_source', 'query_result_id'
+    }
+    for u, v in graph_copy.edges():
+        for attr in list(graph_copy[u][v].keys()):
+            if attr in edge_exclude_attrs:
+                del graph_copy[u][v][attr]
+
     cyto_data = json_graph.cytoscape_data(graph_copy)
     elements = cyto_data["elements"]
 
