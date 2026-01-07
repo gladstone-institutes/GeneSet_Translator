@@ -223,7 +223,8 @@ def prepare_cytoscape_elements(
     # - curie, value: redundant with 'id'
     exclude_attrs = {
         'translator_node', 'node_annotations', 'annotation_features',
-        'is_query_gene', 'is_disease_associated_bp', 'curie', 'value'
+        'is_query_gene', 'is_disease_associated_bp', 'curie', 'value',
+        'hpa_annotation', 'hpa_cell_type_ncpm', 'hpa_tissue_ntpm',  # HPA objects (non-serializable)
     }
     for node in graph_copy.nodes():
         for attr in exclude_attrs:

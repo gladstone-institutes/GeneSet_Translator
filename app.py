@@ -791,7 +791,21 @@ if run_query:
             annotated_pct = annotation_metadata.get('annotation_rate', 0) * 100
             logger.info(f"Node annotation complete: {annotated_pct:.1f}% annotated")
 
-            # Save annotations to response for caching
+            # Step 3.6: Add HPA cell type specificity annotations (BEFORE cache save)
+            status_text.text("Fetching HPA cell type specificity data...")
+            try:
+                kg.graph, hpa_metadata = annotator.annotate_with_hpa(
+                    kg.graph,
+                    progress_callback=lambda msg: status_text.text(f"HPA: {msg}")
+                )
+                st.session_state.hpa_metadata = hpa_metadata
+                hpa_count = hpa_metadata.get('hpa_annotated_count', 0)
+                logger.info(f"HPA annotation complete: {hpa_count} genes with cell type data")
+            except Exception as e:
+                logger.warning(f"HPA annotation failed (non-fatal): {e}")
+                st.session_state.hpa_metadata = None
+
+            # Save ALL annotations (including HPA) to response for caching
             node_annotations = {}
             for node in kg.graph.nodes():
                 features = kg.graph.nodes[node].get('annotation_features', {})
@@ -800,7 +814,7 @@ if run_query:
             response.node_annotations = node_annotations
             response.annotation_metadata = annotation_metadata
 
-            # Re-save cache with annotations included
+            # Re-save cache with all annotations included
             status_text.text("Saving annotations to cache...")
             client._cache_response(response)
             logger.info(f"Cache updated with {len(node_annotations)} node annotations")

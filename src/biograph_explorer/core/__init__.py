@@ -13,6 +13,7 @@ from .trapi_client import TRAPIClient, TRAPIResponse
 from .graph_builder import GraphBuilder, KnowledgeGraph
 from .node_annotator import NodeAnnotator
 from .translator_node import TranslatorNode, TranslatorAttribute, TranslatorEdge
+from .hpa_client import HPAClient, HPAAnnotation
 
 # Phase 3 (stub)
 # from .rag_system import RAGSystem
@@ -26,4 +27,6 @@ __all__ = [
     "TranslatorNode",
     "TranslatorAttribute",
     "TranslatorEdge",
+    "HPAClient",
+    "HPAAnnotation",
 ]

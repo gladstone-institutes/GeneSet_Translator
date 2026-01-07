@@ -282,6 +282,33 @@ class NodeAnnotator:
 
         return graph, metadata
 
+    def annotate_with_hpa(
+        self,
+        graph: nx.DiGraph,
+        progress_callback: Optional[Callable[[str], None]] = None,
+    ) -> Tuple[nx.DiGraph, Dict[str, Any]]:
+        """Add Human Protein Atlas cell type specificity annotations to gene nodes.
+
+        This is an optional enrichment step that adds HPA single-cell RNA data
+        to gene nodes. Should be called after annotate_graph().
+
+        Args:
+            graph: NetworkX DiGraph with gene nodes (already annotated).
+            progress_callback: Optional callback for progress updates.
+
+        Returns:
+            Tuple of (annotated graph, HPA metadata dict).
+        """
+        from .hpa_client import HPAClient
+
+        hpa_client = HPAClient(
+            cache_dir=self.cache_dir.parent / "hpa",
+            timeout=30,
+            max_workers=4,
+        )
+
+        return hpa_client.annotate_graph(graph, progress_callback)
+
     def _batch_annotate(
         self,
         batch_id: int,
