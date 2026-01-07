@@ -224,7 +224,7 @@ def prepare_cytoscape_elements(
     exclude_attrs = {
         'translator_node', 'node_annotations', 'annotation_features',
         'is_query_gene', 'is_disease_associated_bp', 'curie', 'value',
-        'hpa_annotation', 'hpa_cell_type_ncpm', 'hpa_tissue_ntpm',  # HPA objects (non-serializable)
+        'hpa_annotation', 'hpa_cell_type_ncpm', 'hpa_tissue_ntpm', 'hpa_immune_cell_ntpm',  # HPA objects (non-serializable)
     }
     for node in graph_copy.nodes():
         for attr in exclude_attrs:
@@ -1131,10 +1131,17 @@ def filter_graph_by_annotations(
                 matches_all = False
                 break
 
-            # Handle list-valued attributes (e.g., go_bp, go_mf, go_cc, alias)
+            # Handle list-valued attributes (e.g., go_bp, go_mf, go_cc, alias, hpa_top_cell_types)
             if isinstance(node_value, list):
+                # Check if it's a list of tuples (HPA top_cell_types format: [('name', value), ...])
+                if node_value and isinstance(node_value[0], (tuple, list)):
+                    # Extract first element of each tuple (the name)
+                    node_value_strs = {str(v[0]) for v in node_value}
+                else:
+                    # Regular list of values
+                    node_value_strs = {str(v) for v in node_value}
+
                 # Check if ANY of the node's values match ANY selected value
-                node_value_strs = {str(v) for v in node_value}
                 if not node_value_strs.intersection(selected_values):
                     matches_all = False
                     break

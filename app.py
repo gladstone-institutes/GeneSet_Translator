@@ -120,6 +120,8 @@ if 'disease_curie' not in st.session_state:
     st.session_state.disease_curie = None
 if 'annotation_metadata' not in st.session_state:
     st.session_state.annotation_metadata = None
+if 'hpa_metadata' not in st.session_state:
+    st.session_state.hpa_metadata = None
 if 'annotation_filters' not in st.session_state:
     st.session_state.annotation_filters = {}
 if 'debug_mode' not in st.session_state:
@@ -995,7 +997,7 @@ if st.session_state.graph:
                     ).properties(
                         height=min(300, len(top_pub_ids) * 30)
                     )
-                    st.altair_chart(chart, use_container_width=True)
+                    st.altair_chart(chart, width="stretch")
                 else:
                     st.info("No publications found for selected category")
 
@@ -1322,6 +1324,135 @@ if st.session_state.graph:
                                     st.session_state.annotation_filters[go_key] = selected_go
                                 elif go_key in st.session_state.annotation_filters:
                                     del st.session_state.annotation_filters[go_key]
+
+                    # Section 2: HPA Cell Type Specificity Filters
+                    hpa_meta = getattr(st.session_state, 'hpa_metadata', None)
+                    if hpa_meta and st.session_state.graph:
+                        # Collect HPA filter options
+                        hpa_filter_options = {
+                            'hpa_cell_type_specificity': hpa_meta.get('hpa_specificity_categories', []),
+                            'hpa_immune_cell_specificity': hpa_meta.get('hpa_immune_specificities', []),
+                            'hpa_tissue_specificity': hpa_meta.get('hpa_tissue_specificities', []),
+                        }
+
+                        # Collect unique cell types from graph nodes (not in metadata)
+                        all_cell_types = set()
+                        all_immune_cells = set()
+                        all_tissues = set()
+                        for node in st.session_state.graph.nodes():
+                            features = st.session_state.graph.nodes[node].get('annotation_features', {})
+                            for ct, _ in features.get('hpa_top_cell_types', []):
+                                all_cell_types.add(ct)
+                            for ic, _ in features.get('hpa_top_immune_cells', []):
+                                all_immune_cells.add(ic)
+                            for t, _ in features.get('hpa_top_tissues', []):
+                                all_tissues.add(t)
+
+                        hpa_filter_options['hpa_top_cell_types'] = sorted(all_cell_types)
+                        hpa_filter_options['hpa_top_immune_cells'] = sorted(all_immune_cells)
+                        hpa_filter_options['hpa_top_tissues'] = sorted(all_tissues)
+
+                        # Only show HPA section if there are options
+                        has_hpa_options = any(hpa_filter_options.values())
+                        if has_hpa_options:
+                            st.markdown("---")
+                            st.markdown("**HPA Cell Type Specificity Filters**")
+
+                            # Row 1: Category dropdowns
+                            cat_cols = st.columns(3)
+                            with cat_cols[0]:
+                                cell_spec_options = hpa_filter_options.get('hpa_cell_type_specificity', [])
+                                if cell_spec_options:
+                                    selected_cell_spec = st.selectbox(
+                                        "Cell Type Specificity",
+                                        options=["All"] + cell_spec_options,
+                                        key="hpa_cell_type_specificity_filter",
+                                        help="Filter by HPA cell type specificity category"
+                                    )
+                                    if selected_cell_spec != "All":
+                                        st.session_state.annotation_filters['hpa_cell_type_specificity'] = [selected_cell_spec]
+                                    elif 'hpa_cell_type_specificity' in st.session_state.annotation_filters:
+                                        del st.session_state.annotation_filters['hpa_cell_type_specificity']
+
+                            with cat_cols[1]:
+                                immune_spec_options = hpa_filter_options.get('hpa_immune_cell_specificity', [])
+                                if immune_spec_options:
+                                    selected_immune_spec = st.selectbox(
+                                        "Immune Cell Specificity",
+                                        options=["All"] + immune_spec_options,
+                                        key="hpa_immune_cell_specificity_filter",
+                                        help="Filter by HPA immune/blood cell specificity"
+                                    )
+                                    if selected_immune_spec != "All":
+                                        st.session_state.annotation_filters['hpa_immune_cell_specificity'] = [selected_immune_spec]
+                                    elif 'hpa_immune_cell_specificity' in st.session_state.annotation_filters:
+                                        del st.session_state.annotation_filters['hpa_immune_cell_specificity']
+
+                            with cat_cols[2]:
+                                tissue_spec_options = hpa_filter_options.get('hpa_tissue_specificity', [])
+                                if tissue_spec_options:
+                                    selected_tissue_spec = st.selectbox(
+                                        "Tissue Specificity",
+                                        options=["All"] + tissue_spec_options,
+                                        key="hpa_tissue_specificity_filter",
+                                        help="Filter by HPA tissue specificity category"
+                                    )
+                                    if selected_tissue_spec != "All":
+                                        st.session_state.annotation_filters['hpa_tissue_specificity'] = [selected_tissue_spec]
+                                    elif 'hpa_tissue_specificity' in st.session_state.annotation_filters:
+                                        del st.session_state.annotation_filters['hpa_tissue_specificity']
+
+                            # Row 2: Searchable cell type multiselects
+                            st.caption("Filter by specific cell types (nodes with ANY selected type will match)")
+                            search_cols = st.columns(3)
+
+                            with search_cols[0]:
+                                cell_type_options = hpa_filter_options.get('hpa_top_cell_types', [])
+                                if cell_type_options:
+                                    selected_cell_types = st.multiselect(
+                                        f"Cell Types ({len(cell_type_options)})",
+                                        options=cell_type_options,
+                                        default=[],
+                                        key="hpa_cell_types_filter",
+                                        help="Search for specific cell types (e.g., Hepatocytes, Microglia)",
+                                        placeholder="Search cell types..."
+                                    )
+                                    if selected_cell_types:
+                                        st.session_state.annotation_filters['hpa_top_cell_types'] = selected_cell_types
+                                    elif 'hpa_top_cell_types' in st.session_state.annotation_filters:
+                                        del st.session_state.annotation_filters['hpa_top_cell_types']
+
+                            with search_cols[1]:
+                                immune_cell_options = hpa_filter_options.get('hpa_top_immune_cells', [])
+                                if immune_cell_options:
+                                    selected_immune_cells = st.multiselect(
+                                        f"Immune Cells ({len(immune_cell_options)})",
+                                        options=immune_cell_options,
+                                        default=[],
+                                        key="hpa_immune_cells_filter",
+                                        help="Search for specific immune cell types",
+                                        placeholder="Search immune cells..."
+                                    )
+                                    if selected_immune_cells:
+                                        st.session_state.annotation_filters['hpa_top_immune_cells'] = selected_immune_cells
+                                    elif 'hpa_top_immune_cells' in st.session_state.annotation_filters:
+                                        del st.session_state.annotation_filters['hpa_top_immune_cells']
+
+                            with search_cols[2]:
+                                tissue_options = hpa_filter_options.get('hpa_top_tissues', [])
+                                if tissue_options:
+                                    selected_tissues = st.multiselect(
+                                        f"Tissues ({len(tissue_options)})",
+                                        options=tissue_options,
+                                        default=[],
+                                        key="hpa_tissues_filter",
+                                        help="Search for specific tissues",
+                                        placeholder="Search tissues..."
+                                    )
+                                    if selected_tissues:
+                                        st.session_state.annotation_filters['hpa_top_tissues'] = selected_tissues
+                                    elif 'hpa_top_tissues' in st.session_state.annotation_filters:
+                                        del st.session_state.annotation_filters['hpa_top_tissues']
 
                     # Show active filters summary
                     active_count = sum(1 for v in st.session_state.annotation_filters.values() if v)
