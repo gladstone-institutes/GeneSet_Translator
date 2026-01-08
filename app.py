@@ -1377,6 +1377,7 @@ if st.session_state.graph:
                         if has_hpa_options:
                             st.markdown("---")
                             st.markdown("**HPA Cell Type Specificity Filters**")
+                            st.caption("Filter genes by RNA expression patterns from Human Protein Atlas single-cell and tissue data")
 
                             # Row 1: Category dropdowns
                             cat_cols = st.columns(3)
@@ -1387,7 +1388,11 @@ if st.session_state.graph:
                                         "Cell Type Specificity",
                                         options=["All"] + cell_spec_options,
                                         key="hpa_cell_type_specificity_filter",
-                                        help="Filter by HPA cell type specificity category"
+                                        help="Single-cell RNA expression pattern:\n"
+                                             "• Cell type enhanced: ≥4× higher vs average\n"
+                                             "• Group enriched: ≥4× higher in 2-5 groups\n"
+                                             "• Low specificity: Broadly expressed\n"
+                                             "• Not detected: Below detection threshold"
                                     )
                                     if selected_cell_spec != "All":
                                         st.session_state.annotation_filters['hpa_cell_type_specificity'] = [selected_cell_spec]
@@ -1401,7 +1406,11 @@ if st.session_state.graph:
                                         "Immune Cell Specificity",
                                         options=["All"] + immune_spec_options,
                                         key="hpa_immune_cell_specificity_filter",
-                                        help="Filter by HPA immune/blood cell specificity"
+                                        help="Blood cell RNA expression (Monaco dataset):\n"
+                                             "• Immune cell enhanced: ≥4× higher vs average\n"
+                                             "• Group enriched: ≥4× higher in 2-5 groups\n"
+                                             "• Low specificity: Broadly expressed\n"
+                                             "• Not detected in immune cells: Below threshold"
                                     )
                                     if selected_immune_spec != "All":
                                         st.session_state.annotation_filters['hpa_immune_cell_specificity'] = [selected_immune_spec]
@@ -1415,7 +1424,12 @@ if st.session_state.graph:
                                         "Tissue Specificity",
                                         options=["All"] + tissue_spec_options,
                                         key="hpa_tissue_specificity_filter",
-                                        help="Filter by HPA tissue specificity category"
+                                        help="Bulk tissue RNA expression (GTEx + HPA):\n"
+                                             "• Tissue enriched: ≥4× higher in 1 vs all others\n"
+                                             "• Group enriched: ≥4× higher in 2-5 vs others\n"
+                                             "• Tissue enhanced: ≥4× higher vs average\n"
+                                             "• Low specificity: Broadly expressed\n"
+                                             "• Not detected: Below detection threshold"
                                     )
                                     if selected_tissue_spec != "All":
                                         st.session_state.annotation_filters['hpa_tissue_specificity'] = [selected_tissue_spec]
@@ -1423,7 +1437,7 @@ if st.session_state.graph:
                                         del st.session_state.annotation_filters['hpa_tissue_specificity']
 
                             # Row 2: Searchable cell type multiselects
-                            st.caption("Filter by specific cell types (nodes with ANY selected type will match)")
+                            st.caption("Filter by top-expressing cell types/tissues (shows genes with ANY selected type)")
                             search_cols = st.columns(3)
 
                             with search_cols[0]:
@@ -1434,7 +1448,7 @@ if st.session_state.graph:
                                         options=cell_type_options,
                                         default=[],
                                         key="hpa_cell_types_filter",
-                                        help="Search for specific cell types (e.g., Hepatocytes, Microglia)",
+                                        help="Top 5 highest-expressing cell types per gene (nCPM: normalized counts per million from scRNA-seq)",
                                         placeholder="Search cell types..."
                                     )
                                     if selected_cell_types:
@@ -1450,7 +1464,7 @@ if st.session_state.graph:
                                         options=immune_cell_options,
                                         default=[],
                                         key="hpa_immune_cells_filter",
-                                        help="Search for specific immune cell types",
+                                        help="Top 5 highest-expressing blood cell types per gene (nTPM: normalized transcripts per million)",
                                         placeholder="Search immune cells..."
                                     )
                                     if selected_immune_cells:
@@ -1466,7 +1480,7 @@ if st.session_state.graph:
                                         options=tissue_options,
                                         default=[],
                                         key="hpa_tissues_filter",
-                                        help="Search for specific tissues",
+                                        help="Top 3 highest-expressing tissues per gene (nTPM: normalized transcripts per million from bulk RNA-seq)",
                                         placeholder="Search tissues..."
                                     )
                                     if selected_tissues:
