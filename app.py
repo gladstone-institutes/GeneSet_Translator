@@ -1494,7 +1494,13 @@ if st.session_state.graph:
                         st.caption(f":material/filter_list: {active_count} filter(s) active - connected nodes will also be shown")
 
         # Render streamlit-cytoscape visualization
-        from biograph_explorer.ui.network_viz import render_network_visualization, filter_graph_by_annotations, filter_graph_by_category, filter_graph_by_publication
+        from biograph_explorer.ui.network_viz import (
+            render_network_visualization,
+            filter_graph_by_annotations,
+            filter_graph_by_category,
+            filter_graph_by_publication,
+            calculate_edge_font_size,
+        )
         from streamlit_cytoscape import streamlit_cytoscape
 
         display_graph = st.session_state.graph
@@ -1666,10 +1672,14 @@ if st.session_state.graph:
             # This approach colors only edges with the specific publication, not all edges
             # with a matching predicate.
 
-            # Meta-edge styling: only set properties that don't change with sliders
-            # Width and font-size are inherited from EdgeStyle to keep this dict stable
+            # Meta-edge styling: must match regular edge styling for consistency
+            # Use preserved colors from priority edge (streamlit-cytoscape v0.1.4+)
+            # This ensures meta-edges maintain correct colors after selection/deselection
             meta_edge_style = {
                 "text-rotation": "autorotate",  # Align label with edge line
+                "font-size": calculate_edge_font_size(edge_width),  # Match regular edge font size
+                "line-color": "data(_preservedLineColor)",
+                "target-arrow-color": "data(_preservedArrowColor)",
             }
 
             streamlit_cytoscape(

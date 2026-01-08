@@ -658,6 +658,21 @@ def create_node_styles(
     return node_styles
 
 
+def calculate_edge_font_size(edge_width: int) -> int:
+    """Calculate edge label font size based on edge width.
+
+    Uses consistent formula across both EdgeStyle and meta-edge styling.
+    Font scales from 8px at width 1, up to 14px at width 10.
+
+    Args:
+        edge_width: Edge width in pixels (1-10)
+
+    Returns:
+        Font size in pixels (8-14)
+    """
+    return max(8, min(14, 6 + edge_width))
+
+
 def create_edge_styles(graph: Union[nx.DiGraph, nx.MultiDiGraph], edge_width: int = 2) -> List["EdgeStyle"]:
     """Create EdgeStyle objects for each predicate in the graph.
 
@@ -682,7 +697,7 @@ def create_edge_styles(graph: Union[nx.DiGraph, nx.MultiDiGraph], edge_width: in
     # Width and font size are static values applied uniformly to all edges
     # Colors are set per-edge in prepare_cytoscape_elements() via _line_color data attribute
     # This allows publication-filtered edges to be teal while others use default colors
-    edge_font_size = max(8, min(14, 6 + edge_width))  # Scale font: 8px at width 1, up to 14px at width 10
+    edge_font_size = calculate_edge_font_size(edge_width)
     edge_custom_styles = {
         "width": edge_width,  # Static value
         "font-size": edge_font_size,  # Static value
