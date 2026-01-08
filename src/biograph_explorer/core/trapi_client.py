@@ -151,6 +151,10 @@ class TRAPIResponse(BaseModel):
         default=None,
         description="Annotation metadata (filterable_attributes, searchable_attributes, etc.)"
     )
+    hpa_metadata: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="HPA annotation metadata (specificity categories, cell types, etc.)"
+    )
 
 
 class TRAPIClient:

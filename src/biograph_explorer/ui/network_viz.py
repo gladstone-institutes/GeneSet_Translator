@@ -44,9 +44,11 @@ CATEGORY_COLORS = {
     "Other": "#666666",          # Gray
 }
 
-# Edge color constant for publication highlighting
-# Teal from Tableau colorblind-friendly palette
+# Edge color constants
+# Teal from Tableau colorblind-friendly palette (for publication highlighting)
 HIGHLIGHT_EDGE_COLOR = "#17BECF"
+# Default gray for non-highlighted edges
+DEFAULT_EDGE_COLOR = "#999999"
 
 # Get the absolute path to the assets directory
 _ASSETS_DIR = Path(__file__).parent.parent / "assets"
@@ -548,23 +550,27 @@ def prepare_cytoscape_elements(
             if query_result_id is not None:
                 edge_element["data"]["_query_result_id"] = query_result_id
 
-            # Set edge color and class based on publication highlight filter
+            # Set edge color based on publication highlight filter
             has_filtered_pub = edge_attrs.get('_has_filtered_pub', False)
 
-            # Add CSS class for highlighted edges (Cytoscape.js class selector)
-            # This enables the 'edge.highlighted_pub' style to apply teal color
-            if has_filtered_pub:
-                if "classes" in edge_element:
-                    edge_element["classes"] += " highlighted_pub"
-                else:
-                    edge_element["classes"] = "highlighted_pub"
-                logger.debug(f"Edge {source} -> {target} marked for highlighting (class=highlighted_pub)")
+            # Store flag in data for debugging/info panel
+            edge_element["data"]["_has_filtered_pub"] = has_filtered_pub
 
         # Add edge width and scaled font size - internal styling
         edge_element["data"]["_edge_width"] = edge_width
         # Scale font: 8px at width 1, up to 14px at width 10
         edge_font_size = max(8, min(14, 6 + edge_width))
         edge_element["data"]["_edge_font_size"] = edge_font_size
+
+        # Add edge color - internal styling
+        # This sets the color directly in the edge data, which survives collapse/expand
+        # Publication-filtered edges get teal, others get default gray
+        if edge_attrs.get('_has_filtered_pub', False):
+            edge_element["data"]["_line_color"] = HIGHLIGHT_EDGE_COLOR
+            edge_element["data"]["_target_arrow_color"] = HIGHLIGHT_EDGE_COLOR
+        else:
+            edge_element["data"]["_line_color"] = DEFAULT_EDGE_COLOR
+            edge_element["data"]["_target_arrow_color"] = DEFAULT_EDGE_COLOR
 
     # Note: Internal styling attributes are prefixed with '_' and automatically
     # hidden by streamlit-cytoscape's infopanel (hide_underscore_attrs=True by default).
@@ -667,12 +673,14 @@ def create_edge_styles(graph: Union[nx.DiGraph, nx.MultiDiGraph]) -> List["EdgeS
         if predicate:
             predicates.add(predicate)
 
-    # Edge styling: dynamic width and font size
-    # Note: Edge color is handled via CSS class 'highlighted_pub' for publication filtering
-    # (see get_highlighted_edge_style() for teal color on filtered edges)
+    # Edge styling: dynamic width, font size, and color
+    # Colors are set per-edge in prepare_cytoscape_elements() via _line_color data attribute
+    # This allows publication-filtered edges to be teal while others use default colors
     edge_custom_styles = {
         "width": "data(_edge_width)",
         "font-size": "data(_edge_font_size)",
+        "line-color": "data(_line_color)",
+        "target-arrow-color": "data(_target_arrow_color)",
     }
 
     # Create EdgeStyle for each predicate
@@ -726,22 +734,10 @@ class RawCytoscapeStyle:
         }
 
 
-def get_highlighted_edge_style() -> RawCytoscapeStyle:
-    """Get style for publication-highlighted edges.
-
-    Returns a RawCytoscapeStyle that can be appended to edge_styles list.
-    Uses class selector 'edge.highlighted_pub' to target highlighted edges.
-
-    Returns:
-        RawCytoscapeStyle object for highlighted edges
-    """
-    return RawCytoscapeStyle(
-        selector="edge.highlighted_pub",
-        style={
-            "line-color": HIGHLIGHT_EDGE_COLOR,
-            "target-arrow-color": HIGHLIGHT_EDGE_COLOR,
-        }
-    )
+# DEPRECATED: Removed in favor of per-edge color styling via data attributes
+# Edge colors are now set directly in prepare_cytoscape_elements() using
+# _line_color and _target_arrow_color data attributes, which are more reliable
+# for edges that may be collapsed/expanded by the edge collapsing feature.
 
 
 def get_layout_config(layout_name: str = "dagre") -> Dict[str, Any]:
@@ -907,9 +903,8 @@ def render_network_visualization(
         node_styles = create_node_styles(graph)
         edge_styles = create_edge_styles(graph)
 
-        # Add highlighted edge style for publication filtering
-        # This must come AFTER regular edge styles to have higher CSS specificity
-        edge_styles.append(get_highlighted_edge_style())
+        # Note: Edge colors are set per-edge in prepare_cytoscape_elements()
+        # via _line_color and _target_arrow_color data attributes
 
         # Get layout configuration
         layout_config = get_layout_config(layout)
@@ -1239,7 +1234,10 @@ def filter_graph_by_category(
 
     if not category_nodes:
         logger.warning(f"No nodes match category '{selected_category}'")
-        return graph
+        # Return empty graph of same type instead of original
+        if isinstance(graph, nx.MultiDiGraph):
+            return nx.MultiDiGraph()
+        return nx.DiGraph()
 
     nodes_to_include = set(category_nodes)
 
@@ -1331,7 +1329,10 @@ def filter_graph_by_publication(
 
     if not intermediates_with_pub:
         logger.warning(f"No intermediate nodes found with publication '{selected_publication}'")
-        return graph
+        # Return empty graph of same type instead of original
+        if isinstance(graph, nx.MultiDiGraph):
+            return nx.MultiDiGraph()
+        return nx.DiGraph()
 
     # Step 2: Build node set - intermediates with pub + their connected query genes + disease
     nodes_to_include = set(intermediates_with_pub)

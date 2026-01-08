@@ -271,6 +271,7 @@ else:  # Load Cached Query
                             if node in kg.graph.nodes:
                                 kg.graph.nodes[node]['annotation_features'] = features
                         st.session_state.annotation_metadata = cached_response.annotation_metadata
+                        st.session_state.hpa_metadata = cached_response.hpa_metadata
                         logger.info(f"Restored {len(cached_response.node_annotations)} annotations from cache")
                     else:
                         # Annotations not in cache - fetch from API
@@ -815,6 +816,7 @@ if run_query:
                     node_annotations[node] = features
             response.node_annotations = node_annotations
             response.annotation_metadata = annotation_metadata
+            response.hpa_metadata = st.session_state.hpa_metadata
 
             # Re-save cache with all annotations included
             status_text.text("Saving annotations to cache...")
@@ -1205,17 +1207,34 @@ if st.session_state.graph:
             )
 
         with col5:
-            # Publication filter dropdown
+            # Publication filter dropdown - filtered by selected category
             from biograph_explorer.utils.publication_utils import (
-                get_publication_frequency,
+                get_publication_frequency_by_category,
                 format_publication_display,
             )
 
             if st.session_state.graph:
-                pub_freq = get_publication_frequency(st.session_state.graph)
-                if pub_freq:
+                # Get publication counts broken down by category
+                pub_by_category = get_publication_frequency_by_category(st.session_state.graph)
+
+                if pub_by_category:
+                    # Filter publications based on selected category
+                    if category_filter and category_filter != "All Categories":
+                        # Only show publications that have edges in the selected category
+                        filtered_pubs = {
+                            pub_id: cat_counts.get(category_filter, 0)
+                            for pub_id, cat_counts in pub_by_category.items()
+                            if category_filter in cat_counts
+                        }
+                    else:
+                        # Show all publications with total counts
+                        filtered_pubs = {
+                            pub_id: sum(cat_counts.values())
+                            for pub_id, cat_counts in pub_by_category.items()
+                        }
+
                     # Sort by frequency (descending)
-                    sorted_pubs = sorted(pub_freq.items(), key=lambda x: x[1], reverse=True)
+                    sorted_pubs = sorted(filtered_pubs.items(), key=lambda x: x[1], reverse=True)
                     # Format: "PMID 12345 (7 edges)"
                     pub_options = [
                         f"{format_publication_display(pub_id)} ({count} edges)"
@@ -1245,9 +1264,10 @@ if st.session_state.graph:
                     pub_filter = None
             else:
                 pub_filter = None
+                no_pub_msg = "No publications in this category" if (category_filter and category_filter != "All Categories") else "No publications available"
                 st.selectbox(
                     "Filter by Publication",
-                    options=["No publications available"],
+                    options=[no_pub_msg],
                     disabled=True,
                     help="No publication metadata found in current graph"
                 )
@@ -1495,7 +1515,9 @@ if st.session_state.graph:
                 st.session_state.disease_curie
             )
             post_cat_count = display_graph.number_of_nodes()
-            if post_cat_count < pre_cat_count:
+            if post_cat_count == 0:
+                st.warning(f":material/filter_alt_off: No nodes match the category '{category_filter}'.")
+            elif post_cat_count < pre_cat_count:
                 # Count intermediates and connected query genes separately
                 query_gene_set = set(st.session_state.query_genes) if st.session_state.query_genes else set()
                 category_intermediate_count = sum(
@@ -1533,11 +1555,17 @@ if st.session_state.graph:
                     if d.get('_has_filtered_pub')
                 )
             total_edges = display_graph.number_of_edges()
-            st.info(
-                f":material/highlight: {highlighted_count} edges citing "
-                f"{format_publication_display(pub_filter)} (teal), "
-                f"{total_edges - highlighted_count} context edges (gray)"
-            )
+            if display_graph.number_of_nodes() == 0:
+                st.warning(
+                    f":material/filter_alt_off: No nodes match the selected filters. "
+                    f"The publication '{format_publication_display(pub_filter)}' may not exist in the filtered category."
+                )
+            else:
+                st.info(
+                    f":material/highlight: {highlighted_count} edges citing "
+                    f"{format_publication_display(pub_filter)} (teal), "
+                    f"{total_edges - highlighted_count} context edges (gray)"
+                )
 
         # Prepare visualization data
         viz_data = render_network_visualization(
@@ -1617,27 +1645,12 @@ if st.session_state.graph:
             # Meta-edge styling to match regular edges (font size, width, text rotation)
             meta_edge_font_size = max(8, min(14, 6 + edge_width))
 
-            # Import teal highlight color for priority EdgeStyle
-            from biograph_explorer.ui.network_viz import HIGHLIGHT_EDGE_COLOR
+            # Note: Edge highlighting for publication filter is handled via data selector
+            # 'edge[_has_filtered_pub = true]' in get_highlighted_edge_style()
+            # This approach colors only edges with the specific publication, not all edges
+            # with a matching predicate.
 
-            # Add colored EdgeStyle for priority predicate when publication filter is active
-            # Meta-edges inherit color from the EdgeStyle matching priority_edge_label
-            if pub_filter and priority_label:
-                from streamlit_cytoscape import EdgeStyle
-                priority_edge_style = EdgeStyle(
-                    label=priority_label,
-                    caption="label",
-                    directed=True,
-                    color=HIGHLIGHT_EDGE_COLOR,  # Teal color for meta-edges
-                    custom_styles={
-                        "width": "data(_edge_width)",
-                        "font-size": "data(_edge_font_size)",
-                    }
-                )
-                # Insert at beginning so it takes precedence over default styles
-                viz_data["edge_styles"].insert(0, priority_edge_style)
-
-            # Meta-edge styling: neutral gray base, color comes from priority EdgeStyle
+            # Meta-edge styling: neutral gray base, color comes from data selector
             meta_edge_style = {
                 "width": edge_width,
                 "font-size": meta_edge_font_size,
@@ -1651,9 +1664,9 @@ if st.session_state.graph:
                 edge_styles=viz_data["edge_styles"],
                 key=cytoscape_key,
                 hide_underscore_attrs=not st.session_state.debug_mode,
-                # Edge collapsing: collapse parallel edges and show most specific predicate
+                # Edge collapsing: disable when publication filter is active to show individual edge highlighting
                 edge_actions=["collapse", "expand"],
-                collapse_parallel_edges=True,
+                collapse_parallel_edges=(not pub_filter),
                 priority_edge_label=priority_label,
                 meta_edge_style=meta_edge_style,
             )

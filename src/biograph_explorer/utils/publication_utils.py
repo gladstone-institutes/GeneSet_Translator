@@ -45,7 +45,13 @@ def get_publication_frequency_by_category(
     """
     pub_category_counts: Dict[str, Dict[str, int]] = {}
 
-    for u, v, data in graph.edges(data=True):
+    # Handle both DiGraph and MultiDiGraph
+    if isinstance(graph, nx.MultiDiGraph):
+        edges_iter = graph.edges(keys=True, data=True)
+    else:
+        edges_iter = ((u, v, None, d) for u, v, d in graph.edges(data=True))
+
+    for u, v, _key, data in edges_iter:
         pubs = data.get('publications', [])
         if not pubs:
             continue
