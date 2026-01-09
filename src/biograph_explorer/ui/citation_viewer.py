@@ -12,10 +12,7 @@ import streamlit as st
 from streamlit_cytoscape import streamlit_cytoscape
 
 from biograph_explorer.core.llm_summarizer import CitationGraph
-from biograph_explorer.ui.network_viz import (
-    render_network_visualization,
-    RawCytoscapeStyle,
-)
+from biograph_explorer.ui.network_viz import render_network_visualization
 
 logger = logging.getLogger(__name__)
 
@@ -70,63 +67,12 @@ def render_citation_viewer(
             st.error("Failed to prepare citation graph visualization")
             return
 
-        # Add citation-specific styling
-        # Context (non-cited) nodes: reduced opacity
-        viz_data["node_styles"].append(
-            RawCytoscapeStyle(
-                selector="node[_cited != true]",
-                style={
-                    "opacity": 0.4,  # Dim context nodes
-                }
-            )
-        )
-
-        # Context (non-cited) edges: reduced opacity
-        viz_data["edge_styles"].append(
-            RawCytoscapeStyle(
-                selector="edge[_cited != true]",
-                style={
-                    "opacity": 0.3,  # Dim context edges
-                    "line-color": "#999999",  # Gray for context
-                    "target-arrow-color": "#999999",
-                }
-            )
-        )
-
-        # Cited edges: teal color for high visibility
-        viz_data["edge_styles"].append(
-            RawCytoscapeStyle(
-                selector="edge[_cited = true]",
-                style={
-                    "line-color": "#00BCD4",  # Teal for cited edges
-                    "target-arrow-color": "#00BCD4",
-                    "width": 4,
-                    "opacity": 1.0,
-                    "z-index": 999,
-                }
-            )
-        )
-
-        # Cited nodes: full opacity (keep category colors from main view)
-        viz_data["node_styles"].append(
-            RawCytoscapeStyle(
-                selector="node[_cited = true]",
-                style={
-                    "opacity": 1.0,
-                    "border-width": 4,
-                    "border-color": "#00BCD4",  # Teal border for cited nodes
-                    "z-index": 999,
-                }
-            )
-        )
-
-        # Render with same approach as main network view
+        # Render with same approach as main network view (no custom styling)
         streamlit_cytoscape(
             viz_data["elements"],
             layout=viz_data["layout"],
             node_styles=viz_data["node_styles"],
             edge_styles=viz_data["edge_styles"],
-            height="500px",
             key=f"citation_graph_{citation.citation_id}",
             hide_underscore_attrs=True,
         )
@@ -134,16 +80,14 @@ def render_citation_viewer(
         st.caption("""
         **:material/lightbulb: How to explore:**
         - **Drag** to pan • **Scroll** to zoom • **Click** node or edge to view information
-        - **Bright nodes with teal borders** = cited in this claim • **Teal edges** = cited relationships • **Fullscreen** in top-right
+        - **Fullscreen** in top-right
         """)
 
         # Stats
-        col1, col2, col3 = st.columns(3)
+        col1, col2 = st.columns(2)
         with col1:
-            st.metric("Cited Nodes", len(citation.node_ids), border=True)
+            st.metric("Nodes", subgraph.number_of_nodes(), border=True)
         with col2:
-            st.metric("Context Nodes", subgraph.number_of_nodes() - len(citation.node_ids), border=True)
-        with col3:
             st.metric("Edges", subgraph.number_of_edges(), border=True)
 
     except Exception as e:

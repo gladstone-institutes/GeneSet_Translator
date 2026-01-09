@@ -47,16 +47,23 @@ class SummaryData(BaseModel):
 class LLMSummarizer:
     """Generate citation-based category summaries using Claude Haiku 4."""
 
+    # Default prompt file location (relative to this module)
+    DEFAULT_PROMPT_PATH = Path(__file__).parent.parent / "config" / "prompts" / "category_summary.txt"
+
     def __init__(
         self,
         model: str = "claude-haiku-4-5",
-        cache_dir: Path = Path("data/cache")
+        cache_dir: Path = Path("data/cache"),
+        prompt_path: Optional[Path] = None
     ):
         """Initialize LLM summarizer.
 
         Args:
             model: Claude model to use
             cache_dir: Directory for caching summaries and citations
+            prompt_path: Optional path to custom prompt file. If not provided,
+                        uses the default prompt at config/prompts/category_summary.txt.
+                        The prompt file should contain {category} placeholders.
 
         Note:
             Requires ANTHROPIC_API_KEY environment variable to be set.
@@ -74,6 +81,7 @@ class LLMSummarizer:
             raise ImportError("anthropic package required. Install with: poetry add anthropic")
 
         self.model = model
+        self.prompt_path = prompt_path or self.DEFAULT_PROMPT_PATH
         self.summary_cache_dir = cache_dir / "summaries"
         self.citation_cache_dir = cache_dir / "citation_graphs"
         self.summary_cache_dir.mkdir(parents=True, exist_ok=True)
@@ -556,114 +564,33 @@ class LLMSummarizer:
             return f"Failed to generate summary for {category}: {e}", []
 
     def _build_system_prompt(self, category: str) -> str:
-        """Build the XML-structured system prompt for category summaries."""
-        return f"""You are analyzing a biomedical knowledge graph to identify how intermediate nodes connect query genes to a disease of interest. Your goal is to extract well-supported biological insights and present them with proper citations.
+        """Build the system prompt for category summaries from external file.
 
-The category of intermediate nodes you are analyzing is: {category}
+        Loads the prompt template from the configured prompt_path and substitutes
+        {category} placeholders with the actual category name.
 
-The user will provide the knowledge graph data in JSON format containing:
-- **query_context**: Information about query genes, the disease (disease_curie), and sampling statistics
-- **nodes**: Node objects with attributes including curie, label, categories, is_disease (true for the disease node), is_query_gene (true for query genes), and HPA (Human Protein Atlas) tissue/cell specificity data
-- **edges**: Edge objects with:
-  - subject, object: Node CURIEs
-  - predicate, predicate_definition: Relationship type and its semantic definition
-  - publications: List of PMIDs supporting the edge
-  - **supporting_text**: Sentences extracted from literature describing the relationship (VERY IMPORTANT for understanding mechanistic context)
-  - confidence_scores: Evidence quality metrics
-  - importance_score: Combined score weighing publications and query gene connections
-- **knowledge_sources**: Summary of the data sources used
+        Args:
+            category: The node category being summarized (e.g., "Protein", "ChemicalEntity")
 
-**IMPORTANT**: The disease node (marked with is_disease: true) and its connecting edges are included in the graph. When creating citations that trace pathways to the disease, ALWAYS include the disease CURIE in your node_curies list to ensure full traceability.
+        Returns:
+            Formatted system prompt string
 
-You will complete this task in TWO TURNS within a single response:
+        Raises:
+            FileNotFoundError: If the prompt file doesn't exist
+        """
+        try:
+            with open(self.prompt_path, 'r') as f:
+                prompt_template = f.read()
 
-## TURN 1: SAVE CITATIONS
+            # Substitute {category} placeholders
+            return prompt_template.format(category=category)
 
-First, output citations for every factual claim you will make.
-
-Focus your citations on:
-1. **Convergent nodes**: Intermediate {category} nodes that connect to multiple query genes (these are the most important)
-2. **Disease connections**: Edges connecting intermediate nodes to the disease - include the disease CURIE in citations to show the complete pathway
-3. **Well-supported edges**: Connections with multiple publications, high confidence scores, and rich supporting_text
-4. **HPA expression context**: Tissue-specific or cell-type-specific expression patterns from the HPA data
-5. **Mechanistic insights**: Use the predicate_definition AND supporting_text sentences to explain the biological relationship
-
-**IMPORTANT**: The supporting_text field contains sentences extracted from publications that describe the relationship. Use these to understand and convey the mechanistic nature of connections.
-
-### CRITICAL CITATION REQUIREMENTS:
-
-- Each citation must support ONE specific claim - NEVER combine multiple citations like [Citation 1, 2]
-- Each citation should center on the connections between query genes and ONE intermediate node
-- When multiple edges connect the same nodes, aggregate them by predicate type
-- **ALWAYS include the disease CURIE** in your node_curies list to ensure complete pathway traceability
-- Always include HPA tissue/cell type context when available (e.g., "Protein X is highly expressed in T cells according to HPA data")
-- Use the predicate_definition to explain the semantic meaning of relationships
-- Set confidence level based on publication count: "high" (>5 publications), "medium" (2-5 publications), "low" (<2 publications)
-
-### Citation Format:
-
-For each citation, output:
-<save_citation_graph>
-<citation_id>[number]</citation_id>
-<claim>[The specific biological claim this citation supports]</claim>
-<node_curies>["CURIE1", "CURIE2", ...]</node_curies>
-<confidence>[high/medium/low based on publication count]</confidence>
-</save_citation_graph>
-
-Number your citations sequentially starting from 1.
-
-IMPORTANT: Only include node CURIEs (e.g., "NCBIGene:6776", "UniProtKB:Q00987") in the node_curies array. The system will automatically extract all edges and publications connecting these nodes from the knowledge graph.
-
-## TURN 2: GENERATE SUMMARY
-
-After all citations, write a **300-500 word** summary that synthesizes the key findings.
-
-Your summary should:
-- Focus on convergent pathways that link multiple query genes to the disease through {category} intermediates
-- Include specific tissue or cell type context from HPA data when it provides biological insight
-- Explain the mechanistic nature of relationships (using information from predicate definitions and supporting_text)
-- Use [Citation N] markers after each factual claim, with exactly ONE citation per claim
-- Be written in clear, scientifically accurate prose
-- Prioritize the most well-supported and biologically meaningful connections
-
-Format your summary inside <summary> tags.
-
-### CRITICAL - CITATION FORMAT IN SUMMARY:
-
-**WRONG:**
-- "DPP4 regulates both CXCL10 and CCL2 [Citation 2, 3]"
-- "These genes converge on inflammation [Citations 1-4]"
-- "Multiple pathways are involved [Citation 14, 17]"
-
-**CORRECT:**
-- "DPP4 regulates CXCL10, a key chemokine elevated in COVID-19 [Citation 2]. DPP4 also regulates CCL2, which recruits monocytes [Citation 3]."
-
-If you need to discuss multiple related findings, write a separate sentence for each claim with its own single citation.
-
-### Example:
-
-<save_citation_graph>
-<citation_id>1</citation_id>
-<claim>BRCA1 and TP53 both interact with MDM2, a key regulator in the p53 pathway that shows high expression in lymphoid tissues per HPA</claim>
-<node_curies>["NCBIGene:672", "NCBIGene:7157", "UniProtKB:Q00987", "MONDO:0007254"]</node_curies>
-<confidence>high</confidence>
-</save_citation_graph>
-
-<summary>
-Analysis of the knowledge graph reveals convergent pathways linking BRCA1 and TP53 to breast cancer through key protein intermediates. Both genes interact with MDM2, a critical regulator in the p53 pathway that shows high expression in lymphoid tissues according to HPA data [Citation 1].
-</summary>
-
-### Final Reminders:
-
-- **LIMIT: Create a MAXIMUM of 10 citations** - Focus on the most important and well-supported findings
-- Complete ALL citations FIRST, then write the summary
-- **ONE citation per claim** - if you write [Citation X, Y] you have made a critical error
-- Include the disease CURIE in every citation for complete pathway traceability
-- Include HPA tissue/cell context explicitly in citations when available
-- Use predicate_definition and supporting_text to explain relationship semantics
-- Ensure every factual claim in the summary has exactly one [Citation N] marker
-
-Begin now."""
+        except FileNotFoundError:
+            logger.error(f"Prompt file not found: {self.prompt_path}")
+            raise FileNotFoundError(
+                f"Category summary prompt file not found at {self.prompt_path}. "
+                f"Expected location: src/biograph_explorer/config/prompts/category_summary.txt"
+            )
 
     def _flatten_to_strings(self, data: Any) -> List[str]:
         """Flatten nested lists/structures and extract only string elements.
@@ -779,25 +706,21 @@ Begin now."""
     ) -> Tuple[List[str], List[str], List[str], float]:
         """Extract all edges, publications, and sentences connecting the cited nodes.
 
-        Automatically includes query genes and disease for complete pathway traceability.
-        This ensures citation graphs show the full path from query genes to disease.
+        Only includes nodes explicitly cited by the LLM. Query genes and disease
+        are NOT automatically added - they should only appear if the LLM included
+        them in the citation's node_curies list.
 
         Args:
             graph: Full knowledge graph
             node_curies: List of node CURIEs from the citation
-            query_genes: Query gene CURIEs to include for complete pathways
-            disease_curie: Disease CURIE to include for complete pathways
+            query_genes: Unused, kept for API compatibility
+            disease_curie: Unused, kept for API compatibility
 
         Returns:
             Tuple of (edge_ids, publication_ids, sentences, avg_importance_score)
         """
+        # Only use nodes explicitly cited by the LLM
         node_set = set(node_curies)
-
-        # Auto-include disease and query genes for complete pathway traceability
-        if disease_curie and disease_curie in graph.nodes():
-            node_set.add(disease_curie)
-        if query_genes:
-            node_set.update(g for g in query_genes if g in graph.nodes())
 
         edge_ids = []
         all_publications = []
