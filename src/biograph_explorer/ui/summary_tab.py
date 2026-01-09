@@ -12,7 +12,7 @@ from typing import List, Dict
 import networkx as nx
 import streamlit as st
 
-from biograph_explorer.core.llm_summarizer import LLMSummarizer, SummaryData, CitationGraph
+from biograph_explorer.core.llm_summarizer import LLMSummarizer, SummaryData, CitationGraph, StagedCategoryQuery
 
 logger = logging.getLogger(__name__)
 
@@ -42,12 +42,32 @@ def render_summary_tab(
     st.markdown("#### :material/auto_awesome: LLM-Generated Category Summaries")
     st.caption("Citation-based summaries with verifiable evidence from the knowledge graph")
 
+    # LLM Accuracy Warning
+    st.warning(
+        "**Important:** LLM-generated summaries may contain inaccuracies or hallucinations. "
+        "Always verify claims using the **Citation Graph** viewer to trace statements back to "
+        "the original knowledge graph edges and publications.",
+        icon=":material/warning:"
+    )
+
     # Get intermediate categories
     categories = _get_intermediate_categories(graph, query_genes)
 
     if not categories:
         st.warning("No intermediate categories found in graph")
         return
+
+    # Max nodes slider for controlling context size and cost
+    max_nodes = st.slider(
+        "Max Nodes per Category",
+        min_value=5,
+        max_value=50,
+        value=20,
+        step=5,
+        help="Maximum intermediate nodes to include in each category summary. "
+             "Higher values provide more context but increase token usage and cost.",
+        key="summary_max_nodes"
+    )
 
     # Category selector
     selected_categories = st.multiselect(
@@ -57,18 +77,59 @@ def render_summary_tab(
         help="Choose which node categories to generate summaries for"
     )
 
-    # Generate button with cost estimate
-    col1, col2 = st.columns([1, 4])
-    with col1:
-        generate_btn = st.button(
-            "Generate Summaries",
-            disabled=len(selected_categories) == 0,
-            type="primary"
-        )
-    with col2:
-        if len(selected_categories) > 0:
-            estimated_cost = 0.003 * len(selected_categories)
-            st.caption(f"💰 Estimated cost: ~${estimated_cost:.3f} ({len(selected_categories)} categories × $0.003)")
+    # Stage queries and compute accurate token counts
+    if len(selected_categories) > 0:
+        # Create staging key to detect when we need to restage
+        staging_key = f"{','.join(sorted(selected_categories))}|{max_nodes}|{graph.number_of_edges()}"
+
+        # Only restage if inputs changed
+        if st.session_state.get('staging_key') != staging_key:
+            with st.spinner("Calculating token counts..."):
+                summarizer = LLMSummarizer()
+                staged_queries, total_cost = summarizer.stage_all_categories(
+                    graph=graph,
+                    categories=selected_categories,
+                    query_genes=query_genes,
+                    disease_curie=disease_curie,
+                    max_nodes=max_nodes,
+                    infores_metadata=infores_metadata
+                )
+                st.session_state.staged_queries = {sq.category: sq for sq in staged_queries}
+                st.session_state.staging_key = staging_key
+                st.session_state.staged_total_cost = total_cost
+
+        # Display cost breakdown
+        staged_queries_dict = st.session_state.get('staged_queries', {})
+        total_cost = st.session_state.get('staged_total_cost', 0.0)
+        cached_count = sum(1 for sq in staged_queries_dict.values() if sq.is_cached)
+        new_count = len(selected_categories) - cached_count
+
+        # Cost summary
+        st.markdown(f"**Estimated Cost:** ${total_cost:.4f} ({new_count} new, {cached_count} cached)")
+
+        # Expandable cost breakdown
+        with st.expander("View Token Breakdown by Category", expanded=False):
+            for category in selected_categories:
+                sq = staged_queries_dict.get(category)
+                if sq:
+                    cache_icon = " 💾" if sq.is_cached else ""
+                    cost_str = "$0.0000 (cached)" if sq.is_cached else f"${sq.estimated_cost:.4f}"
+                    st.markdown(
+                        f"**{category}**{cache_icon}: "
+                        f"{sq.input_tokens:,} input + ~{sq.output_tokens_estimate:,} output tokens = {cost_str}"
+                    )
+                    st.caption(
+                        f"  Nodes: {sq.nodes_sampled}/{sq.nodes_total} | "
+                        f"Edges: {sq.edges_sampled} | "
+                        f"Token count via Anthropic API"
+                    )
+
+    # Generate button
+    generate_btn = st.button(
+        "Generate Summaries",
+        disabled=len(selected_categories) == 0,
+        type="primary"
+    )
 
     # Generate summaries
     if generate_btn:
@@ -86,7 +147,8 @@ def render_summary_tab(
                     category=category,
                     query_genes=query_genes,
                     disease_curie=disease_curie,
-                    infores_metadata=infores_metadata
+                    infores_metadata=infores_metadata,
+                    max_nodes=max_nodes
                 )
 
                 # Show if cached or newly generated

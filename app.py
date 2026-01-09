@@ -555,7 +555,7 @@ exclude_literature = st.sidebar.checkbox(
 
 exclude_coexpression = st.sidebar.checkbox(
     "Exclude coexpression",
-    value=False,
+    value=True,
     help="Exclude 'coexpressed_with' predicate"
 )
 

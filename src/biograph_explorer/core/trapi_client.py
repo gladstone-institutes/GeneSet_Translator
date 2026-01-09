@@ -166,7 +166,13 @@ class TRAPIClient:
         >>> response = client.query_gene_neighborhood(genes, disease_curie="MONDO:0100096")
         >>> print(f"Found {len(response.edges)} edges")
     """
-
+    # TODO: Compare the results from TCT pathfinder to how we build the query here
+    # TODO: Make sure we are not quering APIs that do not have information about the intermediates
+    # TODO: Remove the 1-hop and the 2-hop (Gene → Intermediate → Disease BioProcesses) queries
+    # TODO: Improve documentation and naming of the app: Include TCT information and specific 
+    # information about the actual use case
+    # TODO: Identify features that we can port over to TCT 
+    # TODO: Add better use cases : Myelodysplatic syndrome, Acute myeloid leukemia, Chronic myeloid leukemia
     def __init__(
         self,
         cache_dir: Path = Path("data/cache"),

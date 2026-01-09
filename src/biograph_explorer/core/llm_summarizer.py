@@ -44,6 +44,44 @@ class SummaryData(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Tokens, sampling strategy, etc.")
 
 
+class StagedCategoryQuery(BaseModel):
+    """Pre-computed context with ACTUAL token counts for a category summary.
+
+    Used for accurate cost estimation before LLM execution.
+    Input token count is from Anthropic's official token counting API.
+    """
+
+    category: str = Field(description="Node category")
+    context: Dict[str, Any] = Field(description="Prepared JSON context for LLM")
+    input_tokens: int = Field(description="Total input tokens from Anthropic token counting API")
+    system_prompt_tokens: int = Field(description="System prompt tokens (estimated for display breakdown)")
+    output_tokens_estimate: int = Field(default=2000, description="Estimated output tokens")
+    nodes_total: int = Field(description="Total nodes in this category")
+    nodes_sampled: int = Field(description="Nodes included after sampling")
+    edges_sampled: int = Field(description="Edges in sampled subgraph")
+    is_cached: bool = Field(default=False, description="Whether cached result exists")
+
+    @property
+    def total_input_tokens(self) -> int:
+        """Total input tokens (already includes system prompt from API)."""
+        return self.input_tokens
+
+    @property
+    def context_tokens(self) -> int:
+        """Estimated context tokens (total minus system prompt estimate)."""
+        return max(0, self.input_tokens - self.system_prompt_tokens)
+
+    @property
+    def estimated_cost(self) -> float:
+        """Calculate estimated cost using Haiku 4.5 pricing.
+
+        Pricing: $1.00/M input tokens, $5.00/M output tokens
+        """
+        input_cost = (self.input_tokens / 1_000_000) * 1.00
+        output_cost = (self.output_tokens_estimate / 1_000_000) * 5.00
+        return input_cost + output_cost
+
+
 class LLMSummarizer:
     """Generate citation-based category summaries using Claude Haiku 4."""
 
@@ -93,7 +131,8 @@ class LLMSummarizer:
         category: str,
         query_genes: List[str],
         disease_curie: str,
-        infores_metadata: Optional[Dict] = None
+        infores_metadata: Optional[Dict] = None,
+        max_nodes: int = 20
     ) -> SummaryData:
         """Generate citation-based summary for a specific category using JSON context.
 
@@ -103,6 +142,7 @@ class LLMSummarizer:
             query_genes: List of input gene CURIEs
             disease_curie: Target disease CURIE
             infores_metadata: Optional knowledge source metadata
+            max_nodes: Maximum intermediate nodes to include (user-adjustable)
 
         Returns:
             SummaryData with summary text and citations
@@ -133,7 +173,6 @@ class LLMSummarizer:
         logger.info(f"Generating summary for {category}: {len(category_nodes)} nodes")
 
         # Sample top intermediates by query gene connectivity (matches visualization approach)
-        max_nodes = 20  # Top 20 most connected category intermediates
         sampled_subgraph = self._sample_nodes_by_query_gene_connections(
             graph,
             category_nodes,
@@ -152,8 +191,10 @@ class LLMSummarizer:
             infores_metadata
         )
 
-        # Log token usage
-        token_count = self._estimate_json_tokens(context)
+        # Log token usage (use Anthropic API for accurate count)
+        system_prompt = self._build_system_prompt(category)
+        context_json_str = json.dumps(context, indent=2)
+        token_count = self._count_tokens_via_api(system_prompt, context_json_str)
         logger.info(f"JSON context for {category}: {token_count} tokens, "
                    f"{len(context['nodes'])} nodes, {len(context['edges'])} edges")
 
@@ -183,25 +224,6 @@ class LLMSummarizer:
         self._save_to_cache(cache_key, category, summary_data)
 
         return summary_data
-
-    def _estimate_json_tokens(self, context: Dict[str, Any]) -> int:
-        """Estimate token count for JSON context using tiktoken.
-
-        Args:
-            context: JSON context dictionary
-
-        Returns:
-            Estimated token count
-        """
-        try:
-            import tiktoken
-            encoding = tiktoken.get_encoding("cl100k_base")
-            context_str = json.dumps(context, indent=2)
-            return len(encoding.encode(context_str))
-        except ImportError:
-            # Fallback: rough estimate of 4 chars per token
-            context_str = json.dumps(context, indent=2)
-            return len(context_str) // 4
 
     def _generate_cache_key(
         self,
@@ -247,6 +269,217 @@ class LLMSummarizer:
 
         logger.info(f"Cached summary and citations for {category}")
 
+    def _count_tokens_via_api(self, system_prompt: str, user_content: str) -> int:
+        """Count tokens using Anthropic's official token counting API.
+
+        This provides EXACT token counts matching what the API will charge.
+        Uses the messages.count_tokens endpoint.
+
+        Args:
+            system_prompt: System prompt text
+            user_content: User message content (JSON context)
+
+        Returns:
+            Exact input token count from Anthropic API
+        """
+        try:
+            response = self.client.messages.count_tokens(
+                model=self.model,
+                system=system_prompt,
+                messages=[{
+                    "role": "user",
+                    "content": user_content
+                }]
+            )
+            return response.input_tokens
+        except Exception as e:
+            logger.warning(f"Token counting API failed, falling back to character estimate: {e}")
+            # Fallback: rough estimate of 4 chars per token
+            return len(system_prompt + user_content) // 4
+
+    def _estimate_system_prompt_tokens(self, system_prompt: str) -> int:
+        """Estimate system prompt tokens for display breakdown.
+
+        Uses the Anthropic API with an empty user message to get
+        an accurate system prompt token count.
+
+        Args:
+            system_prompt: System prompt text
+
+        Returns:
+            Estimated system prompt token count
+        """
+        try:
+            response = self.client.messages.count_tokens(
+                model=self.model,
+                system=system_prompt,
+                messages=[{
+                    "role": "user",
+                    "content": ""
+                }]
+            )
+            return response.input_tokens
+        except Exception as e:
+            logger.warning(f"System prompt token counting failed: {e}")
+            # Fallback: rough estimate of 4 chars per token
+            return len(system_prompt) // 4
+
+    def stage_category_query(
+        self,
+        graph: nx.MultiDiGraph,
+        category: str,
+        query_genes: List[str],
+        disease_curie: str,
+        max_nodes: int = 20,
+        infores_metadata: Optional[Dict] = None
+    ) -> StagedCategoryQuery:
+        """Stage a category query by preparing context and counting actual tokens.
+
+        This prepares everything needed for an LLM call WITHOUT making the call,
+        allowing accurate cost estimation before execution.
+
+        Args:
+            graph: Full knowledge graph
+            category: Node category to summarize
+            query_genes: List of input gene CURIEs
+            disease_curie: Target disease CURIE
+            max_nodes: Maximum category nodes to include (user-adjustable)
+            infores_metadata: Optional knowledge source metadata
+
+        Returns:
+            StagedCategoryQuery with context, actual token counts, and cost estimate
+        """
+        # Check if cached result exists
+        cache_key = self._generate_cache_key(query_genes, disease_curie, category, graph)
+        cached_summary = self._load_from_cache(cache_key, category)
+        is_cached = cached_summary is not None
+
+        # Filter to category nodes
+        category_nodes = [
+            node for node, data in graph.nodes(data=True)
+            if data.get('category') == category
+        ]
+
+        nodes_total = len(category_nodes)
+
+        if not category_nodes:
+            # No nodes for this category
+            return StagedCategoryQuery(
+                category=category,
+                context={},
+                input_tokens=0,
+                system_prompt_tokens=0,
+                output_tokens_estimate=0,
+                nodes_total=0,
+                nodes_sampled=0,
+                edges_sampled=0,
+                is_cached=is_cached
+            )
+
+        # Sample nodes by query gene connectivity
+        sampled_subgraph = self._sample_nodes_by_query_gene_connections(
+            graph,
+            category_nodes,
+            query_genes,
+            max_nodes,
+            disease_curie=disease_curie
+        )
+
+        # Prepare JSON context
+        context = self._prepare_json_context(
+            sampled_subgraph,
+            category_nodes,
+            query_genes,
+            disease_curie,
+            category,
+            infores_metadata
+        )
+
+        # Build system prompt
+        system_prompt = self._build_system_prompt(category)
+        context_json_str = json.dumps(context, indent=2)
+
+        # Count tokens using Anthropic's official token counting API
+        # This gives exact token counts matching what the API will charge
+        input_tokens = self._count_tokens_via_api(system_prompt, context_json_str)
+
+        # For display purposes, estimate the breakdown (API gives total only)
+        # Use Anthropic API with empty user message to get system prompt tokens
+        system_prompt_tokens = self._estimate_system_prompt_tokens(system_prompt)
+
+        # Estimate output tokens based on context complexity
+        # Based on observed data:
+        # - Small contexts (<10 nodes): ~500-800 output tokens
+        # - Large contexts (>20 nodes): ~2000+ output tokens
+        # Formula: base 500 + 75 tokens per node (up to max 2500)
+        nodes_count = sampled_subgraph.number_of_nodes()
+        output_tokens_estimate = min(500 + (nodes_count * 75), 2500)
+
+        logger.info(
+            f"Staged {category}: {input_tokens:,} input tokens (API), "
+            f"{nodes_count} nodes, {sampled_subgraph.number_of_edges()} edges, "
+            f"~{output_tokens_estimate:,} output tokens (est)"
+            f"{' (cached)' if is_cached else ''}"
+        )
+
+        return StagedCategoryQuery(
+            category=category,
+            context=context,
+            input_tokens=input_tokens,
+            system_prompt_tokens=system_prompt_tokens,
+            output_tokens_estimate=output_tokens_estimate,
+            nodes_total=nodes_total,
+            nodes_sampled=nodes_count,
+            edges_sampled=sampled_subgraph.number_of_edges(),
+            is_cached=is_cached
+        )
+
+    def stage_all_categories(
+        self,
+        graph: nx.MultiDiGraph,
+        categories: List[str],
+        query_genes: List[str],
+        disease_curie: str,
+        max_nodes: int = 20,
+        infores_metadata: Optional[Dict] = None
+    ) -> Tuple[List[StagedCategoryQuery], float]:
+        """Stage all selected categories and compute total cost.
+
+        Args:
+            graph: Full knowledge graph
+            categories: List of categories to stage
+            query_genes: List of input gene CURIEs
+            disease_curie: Target disease CURIE
+            max_nodes: Maximum category nodes to include
+            infores_metadata: Optional knowledge source metadata
+
+        Returns:
+            Tuple of (list of staged queries, total estimated cost)
+        """
+        staged_queries = []
+        total_cost = 0.0
+
+        for category in categories:
+            staged = self.stage_category_query(
+                graph=graph,
+                category=category,
+                query_genes=query_genes,
+                disease_curie=disease_curie,
+                max_nodes=max_nodes,
+                infores_metadata=infores_metadata
+            )
+            staged_queries.append(staged)
+
+            # Only count cost for non-cached queries
+            if not staged.is_cached:
+                total_cost += staged.estimated_cost
+
+        logger.info(
+            f"Staged {len(categories)} categories: total cost ${total_cost:.4f} "
+            f"({sum(1 for sq in staged_queries if sq.is_cached)} cached)"
+        )
+
+        return staged_queries, total_cost
 
     def _sample_nodes_by_query_gene_connections(
         self,
@@ -556,7 +789,18 @@ class LLMSummarizer:
                 logger.warning(f"No summary found in response for {category}")
                 summary_text = f"Summary extraction failed for {category}. Check data/cache/llm_debug/ for raw response."
 
-            logger.info(f"Generated summary for {category}: {len(citations)} citations, {len(summary_text)} chars")
+            # Log actual token usage from API response
+            if hasattr(response, 'usage'):
+                actual_input = response.usage.input_tokens
+                actual_output = response.usage.output_tokens
+                actual_cost = (actual_input / 1_000_000) * 1.00 + (actual_output / 1_000_000) * 5.00
+                logger.info(
+                    f"Generated summary for {category}: {len(citations)} citations, {len(summary_text)} chars | "
+                    f"Actual usage: {actual_input:,} input + {actual_output:,} output = ${actual_cost:.4f}"
+                )
+            else:
+                logger.info(f"Generated summary for {category}: {len(citations)} citations, {len(summary_text)} chars")
+
             return summary_text, citations
 
         except Exception as e:
