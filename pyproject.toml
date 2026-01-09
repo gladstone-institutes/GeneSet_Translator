@@ -19,6 +19,11 @@ scipy = "^1.16.2"
 pyyaml = "^6.0.3"
 treelib = "^1.8.0"
 altair = "^6.0.0"
+# Phase 3: LLM Summarization (optional)
+anthropic = "^0.40.0"
+tiktoken = "^0.8.0"
+python-dotenv = "^1.0.0"
+requests = "^2.32.0"
 
 
 [tool.poetry.group.dev.dependencies]

@@ -21,6 +21,18 @@ from biograph_explorer.utils.biolink_predicates import (
     GRANULARITY_PRESETS,
     get_allowed_predicates_for_display,
 )
+from biograph_explorer.utils.infores_utils import (
+    download_infores_catalog,
+    parse_infores_catalog,
+    extract_unique_sources,
+    filter_relevant_infores,
+    generate_source_summary,
+)
+from biograph_explorer.ui.summary_tab import render_summary_tab
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 
 def notify(message: str, msg_type: str = "info", icon: str = None):
@@ -132,6 +144,10 @@ if 'category_mismatch_detail' not in st.session_state:
     st.session_state.category_mismatch_detail = None
 if 'collapse_counter' not in st.session_state:
     st.session_state.collapse_counter = 0
+if 'infores_metadata' not in st.session_state:
+    st.session_state.infores_metadata = None
+if 'summaries' not in st.session_state:
+    st.session_state.summaries = {}
 
 # Title
 st.markdown("### :material/biotech: BioGraph Explorer")
@@ -300,6 +316,32 @@ else:  # Load Cached Query
                             st.session_state.annotation_metadata = None
 
                     progress_bar.progress(90)
+
+                    # Extract knowledge sources
+                    status_text.text("Extracting knowledge sources...")
+                    import os
+                    anthropic_api_key = os.environ.get('ANTHROPIC_API_KEY')
+                    try:
+                        infores_cache_dir = Path("data/cache/infores")
+                        infores_cache_dir.mkdir(parents=True, exist_ok=True)
+
+                        catalog = download_infores_catalog(infores_cache_dir)
+                        parsed_catalog = parse_infores_catalog(catalog)
+                        relevant_ids = extract_unique_sources(kg.graph)
+
+                        if anthropic_api_key:
+                            filtered = filter_relevant_infores(parsed_catalog, relevant_ids, anthropic_api_key, infores_cache_dir)
+                        else:
+                            filtered = {k: v for k, v in parsed_catalog.items() if k in relevant_ids}
+
+                        source_summary = generate_source_summary(filtered, kg.graph)
+                        st.session_state.infores_metadata = {
+                            'filtered_entries': filtered,
+                            'summary': source_summary
+                        }
+                    except Exception as e:
+                        logger.warning(f"Knowledge source extraction failed: {e}")
+                        st.session_state.infores_metadata = None
 
                     # Save to session state
                     st.session_state.graph = kg.graph
@@ -569,6 +611,13 @@ st.sidebar.checkbox(
     help="Show all node/edge attributes including internal styling data"
 )
 
+# API key status
+import os
+if os.environ.get('ANTHROPIC_API_KEY'):
+    st.sidebar.success("✅ LLM Summary feature enabled")
+else:
+    st.sidebar.info("ℹ️ Add ANTHROPIC_API_KEY to .env for LLM summaries")
+
 # Main area
 if not run_query and not st.session_state.graph:
     # Welcome screen
@@ -835,7 +884,33 @@ if run_query:
         st.session_state.query_genes = response.input_genes
         st.session_state.response = response
         st.session_state.disease_curie = disease_curie  # Store for visualization sampling
-        
+
+        # Extract knowledge sources
+        import os
+        anthropic_api_key = os.environ.get('ANTHROPIC_API_KEY')
+
+        try:
+            cache_dir = Path("data/cache/infores")
+            cache_dir.mkdir(parents=True, exist_ok=True)
+
+            catalog = download_infores_catalog(cache_dir)
+            parsed_catalog = parse_infores_catalog(catalog)
+            relevant_ids = extract_unique_sources(st.session_state.graph)
+
+            if anthropic_api_key:
+                filtered = filter_relevant_infores(parsed_catalog, relevant_ids, anthropic_api_key, cache_dir)
+            else:
+                filtered = {k: v for k, v in parsed_catalog.items() if k in relevant_ids}
+
+            source_summary = generate_source_summary(filtered, st.session_state.graph)
+            st.session_state.infores_metadata = {
+                'filtered_entries': filtered,
+                'summary': source_summary
+            }
+        except Exception as e:
+            logger.warning(f"Knowledge source extraction failed: {e}")
+            st.session_state.infores_metadata = None
+
         progress_bar.progress(100)
         status_text.markdown(":material/check_circle: Analysis complete!")
 
@@ -880,12 +955,26 @@ if run_query:
         import traceback
         st.code(traceback.format_exc())
 
+# Check for API key (for conditional Summary tab)
+import os
+anthropic_api_key = os.environ.get('ANTHROPIC_API_KEY')
+
 # Display results
 if st.session_state.graph:
     st.divider()
-    
-    # Tabs for different views
-    tab_network, tab_overview = st.tabs([":material/hub: Network", ":material/analytics: Overview"])
+
+    # Tabs for different views (conditionally include Summary tab)
+    if anthropic_api_key:
+        tab_network, tab_overview, tab_summary = st.tabs([
+            ":material/hub: Network",
+            ":material/analytics: Overview",
+            ":material/auto_awesome: Summary"
+        ])
+    else:
+        tab_network, tab_overview = st.tabs([
+            ":material/hub: Network",
+            ":material/analytics: Overview"
+        ])
 
     with tab_overview:
         st.markdown("#### Analysis Overview")
@@ -917,6 +1006,47 @@ if st.session_state.graph:
             st.dataframe(category_df, width='stretch')
         else:
             st.info("No node category data available")
+
+        # Data Sources section
+        st.subheader("Data Sources")
+        if st.session_state.infores_metadata:
+            summary = st.session_state.infores_metadata['summary']
+
+            # Add custom CSS to make metric values responsive
+            st.markdown("""
+                <style>
+                [data-testid="stMetricValue"] {
+                    font-size: clamp(1rem, 2.5vw, 1.5rem) !important;
+                    word-wrap: break-word !important;
+                    overflow-wrap: break-word !important;
+                }
+                </style>
+            """, unsafe_allow_html=True)
+
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Total Sources", summary['total_sources'], border=True)
+            with col2:
+                if summary['knowledge_levels']:
+                    primary_level = max(summary['knowledge_levels'], key=summary['knowledge_levels'].get)
+                    level_display = primary_level.replace("_", " ").title()
+                    st.metric("Knowledge Level", level_display, border=True)
+                else:
+                    st.metric("Knowledge Level", "N/A", border=True)
+            with col3:
+                if summary['agent_types']:
+                    primary_agent = max(summary['agent_types'], key=summary['agent_types'].get)
+                    agent_display = primary_agent.replace("_", " ").title()
+                    st.metric("Agent Type", agent_display, border=True)
+                else:
+                    st.metric("Agent Type", "N/A", border=True)
+
+            with st.expander("View Top Sources"):
+                for source in summary.get('top_sources', [])[:10]:
+                    st.markdown(f"**{source['name']}** ({source['id']})")
+                    st.caption(f"{source['edge_count']} edges | Knowledge Level: {source.get('knowledge_level', 'Unknown')} | Agent Type: {source.get('agent_type', 'Unknown')}")
+        else:
+            st.info("Knowledge source metadata not available")
 
         # Publication Evidence section
         st.subheader("Publication Evidence")
@@ -1132,6 +1262,16 @@ if st.session_state.graph:
                 st.rerun()
         else:
             st.caption("No query messages to display")
+
+    # Summary tab (only if API key configured)
+    if anthropic_api_key:
+        with tab_summary:
+            render_summary_tab(
+                st.session_state.graph,
+                st.session_state.query_genes,
+                st.session_state.disease_curie,
+                st.session_state.infores_metadata
+            )
 
     with tab_network:
         st.markdown("#### Knowledge Graph Visualization")

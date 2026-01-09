@@ -61,7 +61,7 @@ class GraphBuilder:
         curie_to_name: Optional[Dict[str, str]] = None,
         disease_bp_curies: Optional[List[str]] = None,
     ) -> KnowledgeGraph:
-        """Build NetworkX DiGraph from TRAPI edge list.
+        """Build NetworkX MultiDiGraph from TRAPI edge list.
 
         Extracted from notebook cells 12, 18.
 
