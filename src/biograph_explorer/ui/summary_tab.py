@@ -50,37 +50,70 @@ def render_summary_tab(
         icon=":material/warning:"
     )
 
-    # Get intermediate categories
-    categories = _get_intermediate_categories(graph, query_genes)
+    # Check if there are any intermediate categories at all (using min_gene_frequency=1)
+    all_categories = _get_categories_with_node_counts(graph, query_genes, min_gene_frequency=1)
 
-    if not categories:
+    if not all_categories:
         st.warning("No intermediate categories found in graph")
         return
 
-    # Max nodes slider for controlling context size and cost
-    max_nodes = st.slider(
-        "Max Nodes per Category",
-        min_value=5,
-        max_value=50,
-        value=20,
-        step=5,
-        help="Maximum intermediate nodes to include in each category summary. "
-             "Higher values provide more context but increase token usage and cost.",
-        key="summary_max_nodes"
-    )
+    # Control sliders in columns
+    col1, col2 = st.columns(2)
+
+    with col1:
+        # Max nodes slider for controlling context size and cost
+        max_nodes = st.slider(
+            "Max Nodes per Category",
+            min_value=5,
+            max_value=50,
+            value=20,
+            step=5,
+            help="Maximum intermediate nodes to include in each category summary. "
+                 "Higher values provide more context but increase token usage and cost.",
+            key="summary_max_nodes"
+        )
+
+    with col2:
+        # Min gene frequency filter
+        min_gene_frequency = st.slider(
+            "Min Gene Frequency",
+            min_value=1,
+            max_value=5,
+            value=2,
+            step=1,
+            help="Minimum number of query genes an intermediate must connect to. "
+                 "Higher values focus on more convergent nodes but may exclude relevant intermediates.",
+            key="summary_min_gene_freq"
+        )
+
+    # Filter categories to only show those with intermediates passing the gene_frequency filter
+    categories_with_counts = _get_categories_with_node_counts(graph, query_genes, min_gene_frequency)
+
+    if not categories_with_counts:
+        st.warning(
+            f"No intermediate categories have nodes with gene_frequency ≥ {min_gene_frequency}. "
+            "Try lowering the Min Gene Frequency filter."
+        )
+        return
+
+    # Format category options with node counts
+    category_options = [cat for cat, count in categories_with_counts]
+    category_labels = {cat: f"{cat} ({count} nodes)" for cat, count in categories_with_counts}
 
     # Category selector
     selected_categories = st.multiselect(
         "Select Categories to Summarize",
-        options=categories,
-        default=categories,
-        help="Choose which node categories to generate summaries for"
+        options=category_options,
+        default=category_options,
+        format_func=lambda x: category_labels.get(x, x),
+        help="Choose which node categories to generate summaries for. "
+             f"Only categories with nodes having gene_frequency ≥ {min_gene_frequency} are shown."
     )
 
     # Stage queries and compute accurate token counts
     if len(selected_categories) > 0:
         # Create staging key to detect when we need to restage
-        staging_key = f"{','.join(sorted(selected_categories))}|{max_nodes}|{graph.number_of_edges()}"
+        staging_key = f"{','.join(sorted(selected_categories))}|{max_nodes}|{min_gene_frequency}|{graph.number_of_edges()}"
 
         # Only restage if inputs changed
         if st.session_state.get('staging_key') != staging_key:
@@ -92,11 +125,13 @@ def render_summary_tab(
                     query_genes=query_genes,
                     disease_curie=disease_curie,
                     max_nodes=max_nodes,
+                    min_gene_frequency=min_gene_frequency,
                     infores_metadata=infores_metadata
                 )
                 st.session_state.staged_queries = {sq.category: sq for sq in staged_queries}
                 st.session_state.staging_key = staging_key
                 st.session_state.staged_total_cost = total_cost
+                st.session_state.min_gene_frequency = min_gene_frequency
 
         # Display cost breakdown
         staged_queries_dict = st.session_state.get('staged_queries', {})
@@ -138,6 +173,9 @@ def render_summary_tab(
         progress_bar = st.progress(0)
         status = st.empty()
 
+        # Get min_gene_frequency from session state (set during staging)
+        stored_min_gene_freq = st.session_state.get('min_gene_frequency', min_gene_frequency)
+
         for i, category in enumerate(selected_categories):
             status.markdown(f"🤖 Generating summary for **{category}**...")
 
@@ -148,7 +186,8 @@ def render_summary_tab(
                     query_genes=query_genes,
                     disease_curie=disease_curie,
                     infores_metadata=infores_metadata,
-                    max_nodes=max_nodes
+                    max_nodes=max_nodes,
+                    min_gene_frequency=stored_min_gene_freq
                 )
 
                 # Show if cached or newly generated
@@ -176,26 +215,48 @@ def render_summary_tab(
             render_category_summary(category, summary_data, graph, query_genes)
 
 
-def _get_intermediate_categories(graph: nx.MultiDiGraph, query_genes: List[str]) -> List[str]:
-    """Extract intermediate node categories from graph.
+def _get_categories_with_node_counts(
+    graph: nx.MultiDiGraph,
+    query_genes: List[str],
+    min_gene_frequency: int
+) -> List[tuple]:
+    """Get intermediate categories with counts of nodes passing the gene_frequency filter.
 
     Args:
         graph: Knowledge graph
         query_genes: Query gene CURIEs
+        min_gene_frequency: Minimum gene_frequency threshold
 
     Returns:
-        List of category names, sorted
+        List of (category, count) tuples, sorted by category name.
+        Only includes categories with at least one node passing the filter.
     """
-    categories = set()
+    query_genes_set = set(query_genes)
+    category_counts: Dict[str, int] = {}
 
     for node, data in graph.nodes(data=True):
-        category = data.get('category')
-        # Check if it's actually intermediate (connected to query genes)
-        neighbors = set(graph.predecessors(node)) | set(graph.successors(node))
-        if any(n in query_genes for n in neighbors):
-            categories.add(category)
+        # Skip query genes themselves
+        if node in query_genes_set:
+            continue
 
-    return sorted(categories)
+        category = data.get('category')
+        if not category:
+            continue
+
+        gene_freq = data.get('gene_frequency', 0)
+
+        # Check if node passes the gene_frequency filter
+        if gene_freq >= min_gene_frequency:
+            # Verify it's actually intermediate (connected to query genes)
+            neighbors = set(graph.predecessors(node)) | set(graph.successors(node))
+            if any(n in query_genes_set for n in neighbors):
+                category_counts[category] = category_counts.get(category, 0) + 1
+
+    # Return sorted list of (category, count) tuples, excluding empty categories
+    return sorted(
+        [(cat, count) for cat, count in category_counts.items() if count > 0],
+        key=lambda x: x[0]
+    )
 
 
 def render_category_summary(category: str, summary_data: SummaryData, graph: nx.MultiDiGraph, query_genes: List[str]):

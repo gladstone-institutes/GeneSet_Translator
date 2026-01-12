@@ -295,25 +295,6 @@ class GraphBuilder:
 
         return gene_frequency
 
-    def extract_subgraph(
-        self,
-        graph: Union[nx.DiGraph, nx.MultiDiGraph],
-        center_nodes: List[str],
-        k_hops: int = 1,
-    ) -> Union[nx.DiGraph, nx.MultiDiGraph]:
-        """Extract k-hop subgraph around specified nodes.
-
-        Args:
-            graph: Source NetworkX graph (DiGraph or MultiDiGraph)
-            center_nodes: Center node IDs
-            k_hops: Number of hops to include (default: 1)
-
-        Returns:
-            Subgraph as NetworkX graph (same type as input)
-
-        TODO: Implement subgraph extraction for RAG citations (Phase 3)
-        """
-        raise NotImplementedError("TODO: Implement k-hop subgraph extraction")
 
     def _lookup_node_names(self, curies: List[str]) -> Dict[str, str]:
         """Look up human-readable names for CURIEs using TCT.

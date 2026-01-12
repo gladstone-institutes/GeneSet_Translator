@@ -43,31 +43,12 @@ def format_edge_label(predicate: str) -> str:
 
     Returns:
         Human-readable label (e.g., "associated with")
-
-    TODO: Implement predicate formatting
     """
     # Remove biolink prefix and convert underscores to spaces
     if predicate.startswith("biolink:"):
         predicate = predicate[8:]
     return predicate.replace("_", " ")
 
-
-def format_convergent_nodes_table(
-    convergent_nodes: List[Dict[str, Any]],
-    top_n: int = 20,
-) -> List[Dict[str, Any]]:
-    """Format convergent nodes for table display.
-
-    Args:
-        convergent_nodes: List of convergent node dicts
-        top_n: Number of top nodes to return
-
-    Returns:
-        List of formatted node dicts for table
-
-    TODO: Implement convergent nodes table formatting
-    """
-    raise NotImplementedError("TODO: Implement convergent nodes table formatting")
 
 
 def truncate_string(s: str, max_length: int = 50) -> str:

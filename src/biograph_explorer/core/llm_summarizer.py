@@ -132,7 +132,8 @@ class LLMSummarizer:
         query_genes: List[str],
         disease_curie: str,
         infores_metadata: Optional[Dict] = None,
-        max_nodes: int = 20
+        max_nodes: int = 20,
+        min_gene_frequency: int = 2
     ) -> SummaryData:
         """Generate citation-based summary for a specific category using JSON context.
 
@@ -143,12 +144,13 @@ class LLMSummarizer:
             disease_curie: Target disease CURIE
             infores_metadata: Optional knowledge source metadata
             max_nodes: Maximum intermediate nodes to include (user-adjustable)
+            min_gene_frequency: Minimum gene_frequency for intermediate nodes (user-adjustable)
 
         Returns:
             SummaryData with summary text and citations
         """
         # Check cache first
-        cache_key = self._generate_cache_key(query_genes, disease_curie, category, graph)
+        cache_key = self._generate_cache_key(query_genes, disease_curie, category, graph, min_gene_frequency)
         cached_summary = self._load_from_cache(cache_key, category)
         if cached_summary:
             logger.info(f"Using cached summary for {category}")
@@ -178,7 +180,8 @@ class LLMSummarizer:
             category_nodes,
             query_genes,
             max_nodes,
-            disease_curie=disease_curie
+            disease_curie=disease_curie,
+            min_gene_frequency=min_gene_frequency
         )
 
         # Prepare JSON context
@@ -230,11 +233,12 @@ class LLMSummarizer:
         query_genes: List[str],
         disease_curie: str,
         category: str,
-        graph: nx.MultiDiGraph
+        graph: nx.MultiDiGraph,
+        min_gene_frequency: int = 2
     ) -> str:
-        """Generate hash-based cache key including model and format version."""
-        format_version = "json_v2"  # Increment when changing JSON structure
-        key_str = f"{','.join(sorted(query_genes))}|{disease_curie}|{category}|{graph.number_of_edges()}|{self.model}|{format_version}"
+        """Generate hash-based cache key including model, format version, and filter settings."""
+        format_version = "json_v3"  # Increment when changing JSON structure or filters
+        key_str = f"{','.join(sorted(query_genes))}|{disease_curie}|{category}|{graph.number_of_edges()}|{self.model}|{format_version}|minfreq{min_gene_frequency}"
         return hashlib.md5(key_str.encode()).hexdigest()
 
     def _load_from_cache(self, cache_key: str, category: str) -> Optional[SummaryData]:
@@ -331,6 +335,7 @@ class LLMSummarizer:
         query_genes: List[str],
         disease_curie: str,
         max_nodes: int = 20,
+        min_gene_frequency: int = 2,
         infores_metadata: Optional[Dict] = None
     ) -> StagedCategoryQuery:
         """Stage a category query by preparing context and counting actual tokens.
@@ -344,13 +349,14 @@ class LLMSummarizer:
             query_genes: List of input gene CURIEs
             disease_curie: Target disease CURIE
             max_nodes: Maximum category nodes to include (user-adjustable)
+            min_gene_frequency: Minimum gene_frequency for intermediate nodes (user-adjustable)
             infores_metadata: Optional knowledge source metadata
 
         Returns:
             StagedCategoryQuery with context, actual token counts, and cost estimate
         """
         # Check if cached result exists
-        cache_key = self._generate_cache_key(query_genes, disease_curie, category, graph)
+        cache_key = self._generate_cache_key(query_genes, disease_curie, category, graph, min_gene_frequency)
         cached_summary = self._load_from_cache(cache_key, category)
         is_cached = cached_summary is not None
 
@@ -382,7 +388,8 @@ class LLMSummarizer:
             category_nodes,
             query_genes,
             max_nodes,
-            disease_curie=disease_curie
+            disease_curie=disease_curie,
+            min_gene_frequency=min_gene_frequency
         )
 
         # Prepare JSON context
@@ -441,6 +448,7 @@ class LLMSummarizer:
         query_genes: List[str],
         disease_curie: str,
         max_nodes: int = 20,
+        min_gene_frequency: int = 2,
         infores_metadata: Optional[Dict] = None
     ) -> Tuple[List[StagedCategoryQuery], float]:
         """Stage all selected categories and compute total cost.
@@ -451,6 +459,7 @@ class LLMSummarizer:
             query_genes: List of input gene CURIEs
             disease_curie: Target disease CURIE
             max_nodes: Maximum category nodes to include
+            min_gene_frequency: Minimum gene_frequency for intermediate nodes
             infores_metadata: Optional knowledge source metadata
 
         Returns:
@@ -466,6 +475,7 @@ class LLMSummarizer:
                 query_genes=query_genes,
                 disease_curie=disease_curie,
                 max_nodes=max_nodes,
+                min_gene_frequency=min_gene_frequency,
                 infores_metadata=infores_metadata
             )
             staged_queries.append(staged)
@@ -487,7 +497,8 @@ class LLMSummarizer:
         category_nodes: List[str],
         query_genes: List[str],
         max_nodes: int,
-        disease_curie: Optional[str] = None
+        disease_curie: Optional[str] = None,
+        min_gene_frequency: int = 2
     ) -> nx.MultiDiGraph:
         """Sample category nodes by query gene connectivity (matches visualization approach).
 
@@ -497,9 +508,10 @@ class LLMSummarizer:
 
         Strategy:
             1. Score each category node by number of direct edges to/from query genes
-            2. Take top-N category nodes by score
-            3. Always include query genes and disease node
-            4. Return subgraph with selected nodes and ALL their connecting edges
+            2. Filter nodes by min_gene_frequency threshold
+            3. Take top-N category nodes by score
+            4. Always include query genes and disease node
+            5. Return subgraph with selected nodes and ALL their connecting edges
 
         Args:
             graph: Full knowledge graph
@@ -507,15 +519,15 @@ class LLMSummarizer:
             query_genes: Query gene CURIEs
             max_nodes: Maximum number of category nodes to include
             disease_curie: Target disease CURIE (always included if present)
+            min_gene_frequency: Minimum gene_frequency to include in LLM context (user-adjustable)
 
         Returns:
             Subgraph with top category nodes by query gene connectivity
         """
         query_genes_set = set(query_genes)
-        min_gene_frequency = 2  # Minimum gene_frequency to include in LLM context
 
         # Score each category node by query gene connections
-        # Filter: only include nodes with gene_frequency >= 2 (convergent nodes)
+        # Filter: only include nodes with gene_frequency >= min_gene_frequency (convergent nodes)
         node_scores = {}
         filtered_count = 0
         for node in category_nodes:

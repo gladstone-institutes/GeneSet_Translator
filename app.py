@@ -169,12 +169,12 @@ disease_curie = "MONDO:0100096"  # Default: COVID-19
 if input_method == "Example Dataset":
     dataset_choice = st.sidebar.selectbox(
         "Select Example",
-        ["COVID-19 (10 genes)", "Alzheimer's Disease (15 genes)"]
+        ["COVID-19 (10 genes)", "Eosinophilic Esophagitis (10 genes)"]
     )
-    
-    if dataset_choice == "Alzheimer's Disease (15 genes)":
-        csv_path = "data/test_genes/alzheimers_genes.csv"
-        disease_curie = "MONDO:0004975"
+
+    if dataset_choice == "Eosinophilic Esophagitis (10 genes)":
+        csv_path = "data/test_genes/eosinophilic_esophagitis_genes.csv"
+        disease_curie = "MONDO:0005361"
     else:
         csv_path = "data/test_genes/covid19_genes.csv"
         disease_curie = "MONDO:0100096"
@@ -399,7 +399,7 @@ disease_input_mode = st.sidebar.radio(
 if disease_input_mode == "Search by Name":
     disease_search_query = st.sidebar.text_input(
         "Search Disease",
-        placeholder="e.g., Alzheimer, COVID-19, diabetes",
+        placeholder="e.g., esophagitis, COVID-19, diabetes",
         help="Type a disease name to search. Results will appear below."
     )
 
@@ -453,27 +453,19 @@ else:
     disease_curie = st.sidebar.text_input(
         "Disease CURIE",
         value=st.session_state.disease_selected_curie or disease_curie,
-        help="Disease CURIE ID (e.g., MONDO:0004975 for Alzheimer's)"
+        help="Disease CURIE ID (e.g., MONDO:0005361 for Eosinophilic Esophagitis)"
     )
     st.session_state.disease_selected_curie = disease_curie
 
-# Intermediate entity type selector
+# Pathfinder Query Configuration
 st.sidebar.markdown("---")
-st.sidebar.subheader(":material/tune: Query Configuration")
-
-# Query pattern selector
-query_pattern = st.sidebar.radio(
-    "Query Pattern",
-    options=[
-        "1-hop (Neighborhood Discovery)",
-        "2-hop (Gene → Intermediate → Disease)",
-        "2-hop (Gene → Intermediate → Disease BioProcesses)",
-    ],
-    index=1,  # Default to 2-hop Disease
-    help="1-hop: direct connections. 2-hop to Disease: targets between genes and disease. 2-hop to BioProcesses: targets between genes and disease-associated biological processes."
+st.sidebar.subheader(":material/tune: Pathfinder Query")
+st.sidebar.caption(
+    "Discover connections between your genes and a disease through biological "
+    "intermediates like proteins, chemicals, and other genes."
 )
 
-# Intermediate type options for the query patterns
+# Intermediate type options for the pathfinder query
 INTERMEDIATE_OPTIONS = [
     "Protein",
     "ChemicalEntity (Drugs/Metabolites)",
@@ -486,56 +478,17 @@ INTERMEDIATE_OPTIONS = [
     "CellularComponent",
 ]
 
-if query_pattern == "2-hop (Gene → Intermediate → Disease)":
-    st.sidebar.markdown("**Path:** Gene → **[Intermediate]** → Disease")
+st.sidebar.markdown("**Path:** Gene → **[Intermediate]** → Disease")
 
-    intermediate_types = st.sidebar.multiselect(
-        "Intermediate Entity Types",
-        options=INTERMEDIATE_OPTIONS,
-        default=["Protein", "ChemicalEntity (Drugs/Metabolites)", "Gene"],
-        help="Select intermediate entity types for 2-hop query. These are potential therapeutic targets."
-    )
+intermediate_types = st.sidebar.multiselect(
+    "Intermediate Entity Types",
+    options=INTERMEDIATE_OPTIONS,
+    default=["Protein", "ChemicalEntity (Drugs/Metabolites)", "Gene"],
+    help="Select intermediate entity types for the pathfinder query. These are potential therapeutic targets that connect your genes to the disease."
+)
 
-    if not disease_curie:
-        st.sidebar.warning(":material/warning: Disease CURIE required for 2-hop queries")
-
-elif query_pattern == "2-hop (Gene → Intermediate → Disease BioProcesses)":
-    st.sidebar.markdown("**Path:** Gene → **[Intermediate]** → Disease-associated BiologicalProcess")
-
-    intermediate_types = st.sidebar.multiselect(
-        "Intermediate Entity Types",
-        options=INTERMEDIATE_OPTIONS,
-        default=["Protein", "ChemicalEntity (Drugs/Metabolites)", "Gene", "Pathway", "MolecularActivity"],
-        help="Select intermediate entity types for 2-hop query. These connect genes to disease-associated biological processes."
-    )
-
-    if not disease_curie:
-        st.sidebar.warning(":material/warning: Disease CURIE required for BiologicalProcess queries")
-
-    # BiologicalProcess Discovery settings
-    with st.sidebar.expander("BiologicalProcess Discovery Settings", expanded=False):
-        filter_bp_predicates = st.checkbox(
-            "Filter to informative predicates",
-            value=True,
-            help="Exclude text mining noise like 'occurs_together_in_literature_with' (removes ~85% of noisy edges)"
-        )
-
-        use_cached_bp = st.checkbox(
-            "Use cached BiologicalProcesses if available",
-            value=True,
-            help="Skip Stage 1 discovery if we have cached BiologicalProcesses for this disease"
-        )
-
-else:
-    st.sidebar.markdown("**Path:** Gene → **[Any Connection]**")
-    intermediate_types = []  # Empty for 1-hop
-    filter_bp_predicates = True  # Default
-    use_cached_bp = True  # Default
-
-# Ensure variables are defined for non-BP query patterns
-if query_pattern != "2-hop (Gene → Intermediate → Disease BioProcesses)":
-    filter_bp_predicates = True
-    use_cached_bp = True
+if not disease_curie:
+    st.sidebar.warning(":material/warning: Disease CURIE required for pathfinder queries")
 
 # Predicate Granularity Section
 st.sidebar.markdown("### Predicate Filtering")
@@ -636,9 +589,9 @@ if not run_query and not st.session_state.graph:
     with col2:
         st.subheader(":material/dataset: Example Datasets")
         st.markdown("""
-        **Alzheimer's Disease** (15 genes)
-        - APOE, APP, PSEN1, PSEN2, MAPT, TREM2, CLU, CR1, BIN1, PICALM, CD33, MS4A6A, ABCA7, SORL1, BACE1
-        
+        **Eosinophilic Esophagitis** (10 genes)
+        - CCL26, CAPN14, STAT6, IL13, TSLP, POSTN, ALOX15, CLC, DSG1, FLG
+
         **COVID-19** (10 genes)
         - CD6, IFITM3, IFITM2, STAT5A, KLRG1, DPP4, IL32, PIK3AP1, FYN, IL4R
         """)
@@ -686,120 +639,37 @@ if run_query:
         # Get predicate filtering settings
         predicate_min_depth = GRANULARITY_PRESETS[predicate_preset]["min_depth"]
 
-        # Handle different query patterns
-        if query_pattern == "2-hop (Gene → Intermediate → Disease BioProcesses)" and intermediate_types:
-            # New: 2-hop query to disease-associated BiologicalProcesses
-            intermediate_categories = [type_mapping[t] for t in intermediate_types if t in type_mapping]
+        # Execute pathfinder query
+        intermediate_categories = [type_mapping[t] for t in intermediate_types if t in type_mapping]
 
-            if not disease_curie:
-                raise ValidationError("Disease CURIE is required for BiologicalProcess queries")
+        if not disease_curie:
+            raise ValidationError("Disease CURIE is required for pathfinder queries")
 
-            status_text.text("Stage 1: Discovering disease-associated BiologicalProcesses...")
-            progress_bar.progress(15)
+        if not intermediate_types:
+            raise ValidationError("At least one intermediate entity type must be selected")
 
-            # Check for cached BP results if use_cached_bp is enabled
-            bp_curies = None
-            bp_metadata = None
+        status_text.text(f"Querying Translator APIs for {len(validated_genes)} genes...")
+        progress_bar.progress(20)
 
-            if use_cached_bp:
-                cached_bp_results = client.list_cached_disease_bp_results(disease_curie)
-                if cached_bp_results:
-                    # Use the most recent cache
-                    most_recent = cached_bp_results[0]
-                    try:
-                        bp_curies, bp_metadata = client.load_cached_disease_bp_results(most_recent['path'])
-                        notify(f"Using cached BiologicalProcesses: {len(bp_curies)} BPs from {most_recent['timestamp_str']}", "info", "cached")
-                    except Exception as e:
-                        notify(f"Could not load cached BPs: {e}. Running fresh discovery...", "warning")
-                        bp_curies = None
-                        bp_metadata = None
+        response = client.query_gene_neighborhood(
+            validated_genes,
+            disease_curie=disease_curie,
+            intermediate_categories=intermediate_categories,
+            predicate_min_depth=predicate_min_depth,
+            exclude_literature=exclude_literature,
+            exclude_coexpression=exclude_coexpression,
+            exclude_homology=exclude_homology,
+            progress_callback=progress_callback
+        )
 
-            # Run the full 2-stage query
-            response = client.query_gene_to_bioprocesses(
-                validated_genes,
-                disease_curie=disease_curie,
-                intermediate_categories=intermediate_categories,
-                bp_curies=bp_curies,
-                bp_metadata=bp_metadata,
-                filter_disease_bp=filter_bp_predicates,
-                predicate_min_depth=predicate_min_depth,
-                exclude_literature=exclude_literature,
-                exclude_coexpression=exclude_coexpression,
-                exclude_homology=exclude_homology,
-                timeout_override=600,  # Extended timeout for 2-stage query
-                progress_callback=progress_callback,
-            )
+        progress_bar.progress(60)
 
-            progress_bar.progress(60)
-
-            # Show Stage 1 summary
-            stage1_meta = response.metadata.get("stage1_metadata", {})
-            bp_count = response.metadata.get("bioprocess_count", 0)
-            edges_before = stage1_meta.get("total_edges_before_filter", 0)
-            edges_after = stage1_meta.get("total_edges_after_filter", 0)
-
-            if edges_before > 0 and filter_bp_predicates:
-                notify(f"Stage 1: Found {bp_count} BiologicalProcesses (filtered {edges_before} -> {edges_after} edges)", "info", "filter_alt")
-
-            edges_removed = response.metadata.get("edges_removed", 0)
-            filter_info = f" (filtered {edges_removed} vague relationships)" if edges_removed > 0 else ""
-            intermediate_cats = response.metadata.get("intermediate_categories", [])
-            intermediate_str = ", ".join([c.replace("biolink:", "") for c in intermediate_cats])
-
-            notify(f"2-hop query: Found {len(response.edges)} edges from {response.apis_succeeded}/{response.apis_queried} APIs{filter_info}", "success")
-            notify(f"Query: Gene -> [{intermediate_str}] -> {bp_count} Disease BiologicalProcesses", "info", "timeline")
-
-        elif query_pattern == "2-hop (Gene → Intermediate → Disease)" and intermediate_types:
-            # Standard 2-hop query
-            intermediate_categories = [type_mapping[t] for t in intermediate_types if t in type_mapping]
-
-            if not disease_curie:
-                raise ValidationError("Disease CURIE is required for 2-hop queries")
-
-            status_text.text(f"Querying Translator APIs for {len(validated_genes)} genes...")
-            progress_bar.progress(20)
-
-            response = client.query_gene_neighborhood(
-                validated_genes,
-                disease_curie=disease_curie,
-                intermediate_categories=intermediate_categories,
-                predicate_min_depth=predicate_min_depth,
-                exclude_literature=exclude_literature,
-                exclude_coexpression=exclude_coexpression,
-                exclude_homology=exclude_homology,
-                progress_callback=progress_callback
-            )
-
-            progress_bar.progress(60)
-
-            edges_removed = response.metadata.get("edges_removed", 0)
-            filter_info = f" (filtered {edges_removed} vague relationships)" if edges_removed > 0 else ""
-            intermediate_cats = response.metadata.get("intermediate_categories", [])
-            intermediate_str = ", ".join([c.replace("biolink:", "") for c in intermediate_cats])
-            notify(f"2-hop query: Found {len(response.edges)} edges from {response.apis_succeeded}/{response.apis_queried} APIs{filter_info}", "success")
-            notify(f"Query: Gene -> [{intermediate_str}] -> {disease_curie}", "info", "timeline")
-
-        else:
-            # 1-hop neighborhood discovery
-            status_text.text(f"Querying Translator APIs for {len(validated_genes)} genes...")
-            progress_bar.progress(20)
-
-            response = client.query_gene_neighborhood(
-                validated_genes,
-                disease_curie=disease_curie,
-                intermediate_categories=None,
-                predicate_min_depth=predicate_min_depth,
-                exclude_literature=exclude_literature,
-                exclude_coexpression=exclude_coexpression,
-                exclude_homology=exclude_homology,
-                progress_callback=progress_callback
-            )
-
-            progress_bar.progress(60)
-
-            edges_removed = response.metadata.get("edges_removed", 0)
-            filter_info = f" (filtered {edges_removed} vague relationships)" if edges_removed > 0 else ""
-            notify(f"1-hop query: Found {len(response.edges)} edges from {response.apis_succeeded}/{response.apis_queried} APIs{filter_info}", "success")
+        edges_removed = response.metadata.get("edges_removed", 0)
+        filter_info = f" (filtered {edges_removed} vague relationships)" if edges_removed > 0 else ""
+        intermediate_cats = response.metadata.get("intermediate_categories", [])
+        intermediate_str = ", ".join([c.replace("biolink:", "") for c in intermediate_cats])
+        notify(f"Pathfinder query: Found {len(response.edges)} edges from {response.apis_succeeded}/{response.apis_queried} APIs{filter_info}", "success")
+        notify(f"Query: Gene -> [{intermediate_str}] -> {disease_curie}", "info", "timeline")
 
         # Step 3: Build graph
         status_text.text("Building knowledge graph...")
@@ -809,17 +679,11 @@ if run_query:
         curie_to_symbol = response.metadata.get("curie_to_symbol", {})
         curie_to_name = response.metadata.get("curie_to_name", {})
 
-        # Get disease-associated BP CURIEs for triangle rendering (only for Disease BioProcesses pattern)
-        disease_bp_curies = None
-        if query_pattern == "2-hop (Gene → Intermediate → Disease BioProcesses)":
-            disease_bp_curies = response.metadata.get("bioprocess_endpoints", [])
-
         kg = builder.build_from_trapi_edges(
             response.edges,
             response.input_genes,
             curie_to_symbol,
             curie_to_name,
-            disease_bp_curies=disease_bp_curies,
         )
         
         # Calculate gene frequency
@@ -1047,6 +911,80 @@ if st.session_state.graph:
                     st.caption(f"{source['edge_count']} edges | Knowledge Level: {source.get('knowledge_level', 'Unknown')} | Agent Type: {source.get('agent_type', 'Unknown')}")
         else:
             st.info("Knowledge source metadata not available")
+
+        # Query Genes section
+        st.subheader("Query Genes")
+        if st.session_state.response:
+            gene_symbols = st.session_state.response.metadata.get("gene_symbols", [])
+            normalized_genes = st.session_state.response.metadata.get("normalized_genes", {})
+
+            if gene_symbols:
+                gene_df = pd.DataFrame([
+                    {
+                        "Gene Symbol": symbol,
+                        "CURIE": normalized_genes.get(symbol, "Not normalized"),
+                        "Status": "Normalized" if symbol in normalized_genes else "Failed"
+                    }
+                    for symbol in gene_symbols
+                ])
+                st.dataframe(gene_df, hide_index=True, width='stretch')
+
+                success_count = len(normalized_genes)
+                st.caption(f"{success_count}/{len(gene_symbols)} genes successfully normalized")
+            else:
+                st.info("No gene symbols available")
+        else:
+            st.info("No query data available")
+
+        # API Query Log section
+        st.subheader("API Query Log")
+        if st.session_state.response and st.session_state.response.metadata.get('api_timings'):
+            api_timings = st.session_state.response.metadata['api_timings']
+
+            # Summary metrics
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("APIs Queried", len(api_timings), border=True)
+            with col2:
+                successful = sum(1 for t in api_timings if t['success'])
+                st.metric("APIs Succeeded", f"{successful}/{len(api_timings)}", border=True)
+            with col3:
+                total_duration = st.session_state.response.metadata.get('total_query_duration', 0)
+                st.metric("Query Duration", f"{total_duration:.1f}s", border=True)
+
+            # Expandable table with API details
+            with st.expander("View API Details"):
+                # Build DataFrame for display
+                api_df = pd.DataFrame([
+                    {
+                        "API": t['api_name'],
+                        "Status": "Success" if t['success'] else (t.get('error_type') or 'Failed').replace('_', ' ').title(),
+                        "Edges": t['edge_count'],
+                        "Duration": f"{t['duration_seconds']:.2f}s"
+                    }
+                    for t in sorted(api_timings, key=lambda x: x['edge_count'], reverse=True)
+                ])
+                st.dataframe(
+                    api_df,
+                    hide_index=True,
+                    use_container_width=True,
+                    column_config={
+                        "API": st.column_config.TextColumn("API", width="large"),
+                        "Status": st.column_config.TextColumn("Status", width="small"),
+                        "Edges": st.column_config.NumberColumn("Edges", width="small"),
+                        "Duration": st.column_config.TextColumn("Duration", width="small"),
+                    }
+                )
+
+                # Show filtered-out APIs if available
+                filtered_out = st.session_state.response.metadata.get('filtered_out_apis', {})
+                if filtered_out:
+                    st.caption(f"{len(filtered_out)} APIs filtered out (didn't support exact requested categories)")
+                    with st.expander("View Filtered APIs"):
+                        for api, reason in sorted(filtered_out.items()):
+                            st.text(f"{api}: {reason}")
+        else:
+            st.info("No API query data available")
 
         # Publication Evidence section
         st.subheader("Publication Evidence")
@@ -1317,17 +1255,17 @@ if st.session_state.graph:
                     if node not in query_gene_set and node != st.session_state.disease_curie
                 )
                 max_slider_value = max(intermediate_count, 10)  # At least 10
-                default_value = min(20, intermediate_count)  # Default to 200 or total if less
+                default_value = min(5, intermediate_count)
             else:
-                max_slider_value = 500
-                default_value = 20
+                max_slider_value = 100
+                default_value = 5
 
             max_intermediates = st.slider(
                 "Top Intermediates",
-                min_value=10,
+                min_value=1,
                 max_value=max_slider_value,
                 value=default_value,
-                step=10,
+                step=1,
                 help="Number of top intermediate nodes to display, ranked by connections to query genes"
             )
 
@@ -1428,7 +1366,7 @@ if st.session_state.graph:
         with col7:
             use_metric_sizing = st.checkbox(
                 "Use Metric-Based Sizing",
-                value=True,
+                value=False,
                 help="When enabled, node sizes vary by the selected metric. When disabled, all nodes are the same size."
             )
 
@@ -1838,9 +1776,46 @@ if st.session_state.graph:
 
             st.caption("""
             **:material/lightbulb: How to explore:**
-            - **Drag** to pan • **Scroll** to zoom • **Click** node or edge to select and view information
-            - **Double-click** collapsed edge to expand parallel edges • **Fullscreen** in top-right
+            - **Drag** to pan | **Scroll** to zoom | **Click** node or edge to select
+            - **Double-click** collapsed edge to expand | **Fullscreen** in top-right
             """)
+
+            with st.expander("Legend", expanded=False):
+                from biograph_explorer.ui.network_viz import CATEGORY_COLORS, HIGHLIGHT_EDGE_COLOR, DEFAULT_EDGE_COLOR
+
+                legend_cols = st.columns([1, 1, 1])
+
+                with legend_cols[0]:
+                    st.markdown("**Node Shapes**")
+                    st.markdown("**▲ Triangle** = Query Gene")
+                    st.markdown("**● Ellipse** = Other nodes")
+
+                with legend_cols[1]:
+                    st.markdown("**Node Colors**")
+                    for category, color in [
+                        ("Gene", CATEGORY_COLORS["Gene"]),
+                        ("Disease", CATEGORY_COLORS["Disease"]),
+                        ("Protein", CATEGORY_COLORS["Protein"]),
+                        ("ChemicalEntity", CATEGORY_COLORS["ChemicalEntity"]),
+                        ("BiologicalProcess", CATEGORY_COLORS["BiologicalProcess"]),
+                        ("Pathway", CATEGORY_COLORS["Pathway"]),
+                        ("AnatomicalEntity", CATEGORY_COLORS["AnatomicalEntity"]),
+                    ]:
+                        st.markdown(
+                            f"<span style='color:{color}; font-size:1.2em;'>●</span> {category}",
+                            unsafe_allow_html=True
+                        )
+
+                with legend_cols[2]:
+                    st.markdown("**Edge Colors**")
+                    st.markdown(
+                        f"<span style='color:{DEFAULT_EDGE_COLOR}; font-size:1.2em;'>━━</span> Default edge",
+                        unsafe_allow_html=True
+                    )
+                    st.markdown(
+                        f"<span style='color:{HIGHLIGHT_EDGE_COLOR}; font-size:1.2em;'>━━</span> Publication highlight",
+                        unsafe_allow_html=True
+                    )
         else:
             st.error("Failed to render visualization")
 

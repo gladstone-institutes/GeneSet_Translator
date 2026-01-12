@@ -1251,33 +1251,37 @@ def filter_graph_by_category(
 
     query_gene_set = set(query_genes) if query_genes else set()
 
-    # First, find all nodes matching the selected category
-    category_nodes = set()
+    # Find intermediate nodes matching the selected category (excluding query genes)
+    # Query genes are handled separately to avoid orphans when filtering by "Gene"
+    category_intermediates = set()
     for node in graph.nodes():
         if graph.nodes[node].get('category') == selected_category:
-            category_nodes.add(node)
+            if node not in query_gene_set:
+                category_intermediates.add(node)
 
-    if not category_nodes:
-        logger.warning(f"No nodes match category '{selected_category}'")
+    if not category_intermediates:
+        logger.warning(f"No intermediate nodes match category '{selected_category}'")
         # Return empty graph of same type instead of original
         if isinstance(graph, nx.MultiDiGraph):
             return nx.MultiDiGraph()
         return nx.DiGraph()
 
-    nodes_to_include = set(category_nodes)
+    nodes_to_include = set(category_intermediates)
 
-    # Include query genes only if they connect to at least one category node
+    # Include query genes only if they connect to at least one category intermediate
     for query_gene in query_gene_set:
         if query_gene not in graph:
             continue
-        # Check if this query gene has any edge to/from a category node
+        # Check if this query gene has any edge to/from a category intermediate
         neighbors = set(graph.predecessors(query_gene)) | set(graph.successors(query_gene))
-        if neighbors & category_nodes:
+        if neighbors & category_intermediates:
             nodes_to_include.add(query_gene)
 
-    # Always include disease node if present
+    # Include disease node if it connects to category intermediates (prevents orphans)
     if disease_curie and disease_curie in graph:
-        nodes_to_include.add(disease_curie)
+        disease_neighbors = set(graph.predecessors(disease_curie)) | set(graph.successors(disease_curie))
+        if disease_neighbors & category_intermediates:
+            nodes_to_include.add(disease_curie)
 
     filtered_graph = graph.subgraph(nodes_to_include).copy()
 
