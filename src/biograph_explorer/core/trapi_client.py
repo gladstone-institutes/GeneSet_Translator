@@ -163,7 +163,6 @@ class TRAPIClient:
         >>> print(f"Found {len(response.edges)} edges")
     """
     # TODO: Identify features that we can port over to TCT
-    # TODO: Add better use cases - COVID is overstudied compared to other diseases so might have a lot more results than others
     def __init__(
         self,
         cache_dir: Path = Path("data/cache"),

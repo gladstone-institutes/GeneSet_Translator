@@ -1293,6 +1293,174 @@ def filter_graph_by_category(
     return filtered_graph
 
 
+def filter_graph_by_name_search(
+    graph: Union[nx.DiGraph, nx.MultiDiGraph],
+    search_term: str,
+    disease_curie: Optional[str] = None,
+) -> Union[nx.DiGraph, nx.MultiDiGraph]:
+    """Filter graph by node name search (case-insensitive).
+
+    Searches node label, original_symbol, synonyms, and annotation aliases.
+    Returns matching nodes plus their direct connections and disease node.
+
+    Args:
+        graph: Full NetworkX graph (DiGraph or MultiDiGraph)
+        search_term: Search string (case-insensitive substring match)
+        disease_curie: Disease CURIE (always included if present)
+
+    Returns:
+        Filtered subgraph with matching nodes + their connections + disease
+    """
+    if not search_term or not search_term.strip():
+        return graph
+
+    search_lower = search_term.strip().lower()
+
+    # Find nodes matching the search term
+    matched_nodes = set()
+
+    for node in graph.nodes():
+        node_attrs = graph.nodes[node]
+
+        # Check label
+        label = node_attrs.get('label', '')
+        if label and search_lower in label.lower():
+            matched_nodes.add(node)
+            continue
+
+        # Check original_symbol (for query genes)
+        original_symbol = node_attrs.get('original_symbol', '')
+        if original_symbol and search_lower in original_symbol.lower():
+            matched_nodes.add(node)
+            continue
+
+        # Check synonyms
+        synonyms = node_attrs.get('synonyms', [])
+        if synonyms:
+            for syn in synonyms:
+                if syn and search_lower in syn.lower():
+                    matched_nodes.add(node)
+                    break
+            if node in matched_nodes:
+                continue
+
+        # Check annotation aliases (from Node Annotator)
+        annotation_features = node_attrs.get('annotation_features', {})
+        aliases = annotation_features.get('alias', [])
+        if aliases:
+            for alias in aliases:
+                if alias and search_lower in str(alias).lower():
+                    matched_nodes.add(node)
+                    break
+
+    if not matched_nodes:
+        logger.warning(f"No nodes match search term '{search_term}'")
+        # Return empty graph of same type
+        if isinstance(graph, nx.MultiDiGraph):
+            return nx.MultiDiGraph()
+        return nx.DiGraph()
+
+    # Build node set: matched nodes + their direct neighbors
+    nodes_to_include = set(matched_nodes)
+
+    # Add direct neighbors of matched nodes (both directions)
+    for node in matched_nodes:
+        for neighbor in graph.predecessors(node):
+            nodes_to_include.add(neighbor)
+        for neighbor in graph.successors(node):
+            nodes_to_include.add(neighbor)
+
+    # Always include disease node if present
+    if disease_curie and disease_curie in graph:
+        nodes_to_include.add(disease_curie)
+
+    # Create subgraph
+    filtered_graph = graph.subgraph(nodes_to_include).copy()
+
+    # Mark nodes for styling (matched vs connected neighbor)
+    for node in filtered_graph.nodes():
+        filtered_graph.nodes[node]['in_filter'] = node in matched_nodes
+
+    logger.info(
+        f"Name search filter '{search_term}': {len(matched_nodes)} matched nodes, "
+        f"{filtered_graph.number_of_nodes()} total nodes (with connections), "
+        f"{filtered_graph.number_of_edges()} edges"
+    )
+
+    return filtered_graph
+
+
+def filter_graph_by_gene_group(
+    graph: Union[nx.DiGraph, nx.MultiDiGraph],
+    selected_group: str,
+    gene_to_group: Dict[str, str],
+    curie_to_symbol: Dict[str, str],
+    disease_curie: Optional[str] = None,
+) -> Union[nx.DiGraph, nx.MultiDiGraph]:
+    """Filter graph to show only genes in selected group + their network.
+
+    Args:
+        graph: Full NetworkX graph (DiGraph or MultiDiGraph)
+        selected_group: Group name to filter by
+        gene_to_group: Mapping of gene symbols to group names
+        curie_to_symbol: Mapping of gene CURIEs to symbols (for reverse lookup)
+        disease_curie: Disease CURIE (always included if connected)
+
+    Returns:
+        Filtered subgraph with group genes + their intermediates + disease
+    """
+    if not selected_group or selected_group == "All Groups":
+        return graph
+
+    # Build reverse mapping: symbol -> curie
+    symbol_to_curie = {v: k for k, v in curie_to_symbol.items()}
+
+    # Find gene CURIEs in the selected group
+    group_gene_curies = set()
+    for symbol, group in gene_to_group.items():
+        if group == selected_group:
+            curie = symbol_to_curie.get(symbol)
+            if curie and curie in graph:
+                group_gene_curies.add(curie)
+
+    if not group_gene_curies:
+        logger.warning(f"No genes found in group '{selected_group}'")
+        if isinstance(graph, nx.MultiDiGraph):
+            return nx.MultiDiGraph()
+        return nx.DiGraph()
+
+    # Build node set: group genes + their intermediate neighbors
+    nodes_to_include = set(group_gene_curies)
+
+    # Find intermediate nodes connected to group genes
+    for gene_curie in group_gene_curies:
+        for neighbor in graph.predecessors(gene_curie):
+            nodes_to_include.add(neighbor)
+        for neighbor in graph.successors(gene_curie):
+            nodes_to_include.add(neighbor)
+
+    # Always include disease node if it connects to any included intermediate
+    if disease_curie and disease_curie in graph:
+        disease_neighbors = set(graph.predecessors(disease_curie)) | set(graph.successors(disease_curie))
+        if disease_neighbors & nodes_to_include:
+            nodes_to_include.add(disease_curie)
+
+    # Create subgraph
+    filtered_graph = graph.subgraph(nodes_to_include).copy()
+
+    # Mark group genes for potential styling
+    for node in filtered_graph.nodes():
+        filtered_graph.nodes[node]['in_filter'] = node in group_gene_curies
+
+    logger.info(
+        f"Gene group filter '{selected_group}': {len(group_gene_curies)} group genes, "
+        f"{filtered_graph.number_of_nodes()} total nodes (with intermediates), "
+        f"{filtered_graph.number_of_edges()} edges"
+    )
+
+    return filtered_graph
+
+
 def filter_graph_by_publication(
     graph: Union[nx.DiGraph, nx.MultiDiGraph],
     selected_publication: str,

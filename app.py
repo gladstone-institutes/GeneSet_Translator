@@ -148,6 +148,12 @@ if 'infores_metadata' not in st.session_state:
     st.session_state.infores_metadata = None
 if 'summaries' not in st.session_state:
     st.session_state.summaries = {}
+if 'gene_to_group' not in st.session_state:
+    st.session_state.gene_to_group = {}  # gene_symbol -> group_name
+if 'gene_group_filter' not in st.session_state:
+    st.session_state.gene_group_filter = "All Groups"
+if 'name_search_filter' not in st.session_state:
+    st.session_state.name_search_filter = ""
 
 # Title
 st.markdown("### :material/biotech: BioGraph Explorer")
@@ -164,20 +170,20 @@ input_method = st.sidebar.radio(
 )
 
 genes = []
-disease_curie = "MONDO:0100096"  # Default: COVID-19
+disease_curie = "MONDO:0005361"  # Default: Eosinophilic Esophagitis (EoE)
 
 if input_method == "Example Dataset":
     dataset_choice = st.sidebar.selectbox(
         "Select Example",
-        ["COVID-19 (10 genes)", "Eosinophilic Esophagitis (10 genes)"]
+        ["Eosinophilic Esophagitis (10 genes)", "COVID-19 (10 genes)"]
     )
 
-    if dataset_choice == "Eosinophilic Esophagitis (10 genes)":
-        csv_path = "data/test_genes/eosinophilic_esophagitis_genes.csv"
-        disease_curie = "MONDO:0005361"
-    else:
+    if dataset_choice == "COVID-19 (10 genes)":
         csv_path = "data/test_genes/covid19_genes.csv"
         disease_curie = "MONDO:0100096"
+    else:
+        csv_path = "data/test_genes/eosinophilic_esophagitis_genes.csv"
+        disease_curie = "MONDO:0005361"
 
     # Update session state when dataset changes
     st.session_state.disease_selected_curie = disease_curie
@@ -185,9 +191,24 @@ if input_method == "Example Dataset":
     try:
         df = pd.read_csv(csv_path)
         genes = df['gene_symbol'].tolist()
+
+        # Parse gene groups if present
+        if 'group' in df.columns:
+            st.session_state.gene_to_group = {
+                row['gene_symbol']: row['group'] if pd.notna(row['group']) else 'Default'
+                for _, row in df.iterrows()
+            }
+        else:
+            st.session_state.gene_to_group = {gene: 'Default' for gene in genes}
+
         st.sidebar.success(f":material/check_circle: Loaded {len(genes)} genes from example dataset")
         with st.sidebar.expander("View genes"):
             st.dataframe(df, width='stretch')
+
+            # Show group assignment UI if groups exist
+            unique_groups = sorted(set(st.session_state.gene_to_group.values()))
+            if len(unique_groups) > 1:
+                st.caption(f"**Gene Groups:** {', '.join(unique_groups)}")
     except Exception as e:
         st.sidebar.error(f"Error loading example: {e}")
 
@@ -203,9 +224,24 @@ elif input_method == "Upload CSV":
             df = pd.read_csv(uploaded_file)
             if 'gene_symbol' in df.columns:
                 genes = df['gene_symbol'].tolist()
+
+                # Parse gene groups if present
+                if 'group' in df.columns:
+                    st.session_state.gene_to_group = {
+                        row['gene_symbol']: row['group'] if pd.notna(row['group']) else 'Default'
+                        for _, row in df.iterrows()
+                    }
+                else:
+                    st.session_state.gene_to_group = {gene: 'Default' for gene in genes}
+
                 st.sidebar.success(f":material/check_circle: Loaded {len(genes)} genes from CSV")
                 with st.sidebar.expander("View genes"):
                     st.dataframe(df, width='stretch')
+
+                    # Show group info if groups exist
+                    unique_groups = sorted(set(st.session_state.gene_to_group.values()))
+                    if len(unique_groups) > 1:
+                        st.caption(f"**Gene Groups:** {', '.join(unique_groups)}")
             else:
                 st.sidebar.error("CSV must have 'gene_symbol' column")
         except Exception as e:
@@ -222,6 +258,8 @@ elif input_method == "Manual Entry":
     if gene_text:
         # Parse input
         genes = [g.strip().upper() for g in gene_text.replace(',', '\n').split('\n') if g.strip()]
+        # For manual entry, assign all genes to Default group
+        st.session_state.gene_to_group = {gene: 'Default' for gene in genes}
         st.sidebar.info(f":material/edit_note: {len(genes)} genes entered")
 
 else:  # Load Cached Query
@@ -262,12 +300,17 @@ else:  # Load Cached Query
                     # Get disease-associated BP CURIEs for triangle rendering (if this was a Disease BioProcesses query)
                     disease_bp_curies = cached_response.metadata.get("bioprocess_endpoints", None)
 
+                    # Get synonyms from cache if available
+                    curie_to_synonyms = cached_response.metadata.get("curie_to_synonyms", {})
+
                     kg = builder.build_from_trapi_edges(
                         cached_response.edges,
                         cached_response.input_genes,
                         curie_to_symbol,
                         curie_to_name,
+                        curie_to_synonyms=curie_to_synonyms,
                         disease_bp_curies=disease_bp_curies,
+                        gene_group_map=st.session_state.gene_to_group,
                     )
 
                     progress_bar.progress(60)
@@ -496,7 +539,7 @@ st.sidebar.markdown("### Predicate Filtering")
 predicate_preset = st.sidebar.selectbox(
     "Relationship Granularity",
     options=["All Relationships", "Standard", "Specific Only"],
-    index=2,  # Default to "Specific Only"
+    index=0,
     help="Filter out vague relationship types. Standard excludes generic predicates like 'related_to'."
 )
 
@@ -684,6 +727,7 @@ if run_query:
             response.input_genes,
             curie_to_symbol,
             curie_to_name,
+            gene_group_map=st.session_state.gene_to_group,
         )
         
         # Calculate gene frequency
@@ -967,7 +1011,7 @@ if st.session_state.graph:
                 st.dataframe(
                     api_df,
                     hide_index=True,
-                    use_container_width=True,
+                    width='stretch',
                     column_config={
                         "API": st.column_config.TextColumn("API", width="large"),
                         "Status": st.column_config.TextColumn("Status", width="small"),
@@ -1571,17 +1615,95 @@ if st.session_state.graph:
                     if active_count > 0:
                         st.caption(f":material/filter_list: {active_count} filter(s) active - connected nodes will also be shown")
 
+        # Visualization controls - Row 4 (Name Search and Gene Group Filter)
+        filter_col1, filter_col2 = st.columns([3, 2])
+
+        with filter_col1:
+            name_search = st.text_input(
+                ":material/search: Search Nodes",
+                value=st.session_state.name_search_filter,
+                placeholder="Search by name, symbol, or alias...",
+                help="Filter nodes by name (case-insensitive). Shows matches + connections + disease.",
+                key="name_search_input"
+            )
+            st.session_state.name_search_filter = name_search
+
+        with filter_col2:
+            # Gene group filter - only show if multiple groups exist
+            unique_groups = sorted(set(st.session_state.gene_to_group.values()))
+            if len(unique_groups) > 1:
+                group_options = ["All Groups"] + unique_groups
+                gene_group_filter = st.selectbox(
+                    ":material/category: Gene Group",
+                    options=group_options,
+                    index=group_options.index(st.session_state.gene_group_filter) if st.session_state.gene_group_filter in group_options else 0,
+                    help="Filter to show genes in selected group + their intermediates + disease"
+                )
+                st.session_state.gene_group_filter = gene_group_filter
+            else:
+                st.session_state.gene_group_filter = "All Groups"
+
         # Render streamlit-cytoscape visualization
         from biograph_explorer.ui.network_viz import (
             render_network_visualization,
             filter_graph_by_annotations,
             filter_graph_by_category,
             filter_graph_by_publication,
+            filter_graph_by_name_search,
+            filter_graph_by_gene_group,
             calculate_edge_font_size,
         )
         from streamlit_cytoscape import streamlit_cytoscape
 
         display_graph = st.session_state.graph
+
+        # Apply gene group filter first (restricts to group's subnetwork)
+        if st.session_state.gene_group_filter and st.session_state.gene_group_filter != "All Groups":
+            curie_to_symbol = {}
+            if st.session_state.response:
+                curie_to_symbol = st.session_state.response.metadata.get("curie_to_symbol", {})
+            pre_group_count = display_graph.number_of_nodes()
+            display_graph = filter_graph_by_gene_group(
+                display_graph,
+                st.session_state.gene_group_filter,
+                st.session_state.gene_to_group,
+                curie_to_symbol,
+                st.session_state.disease_curie
+            )
+            post_group_count = display_graph.number_of_nodes()
+            if post_group_count > 0:
+                # Count genes in the group
+                group_gene_count = sum(
+                    1 for node in display_graph.nodes()
+                    if display_graph.nodes[node].get('in_filter', False)
+                )
+                st.info(
+                    f":material/category: Gene group '{st.session_state.gene_group_filter}': "
+                    f"{group_gene_count} genes + {post_group_count - group_gene_count} intermediates"
+                )
+            else:
+                st.warning(f":material/filter_alt_off: No genes found in group '{st.session_state.gene_group_filter}'")
+
+        # Apply name search filter
+        if st.session_state.name_search_filter:
+            pre_search_count = display_graph.number_of_nodes()
+            display_graph = filter_graph_by_name_search(
+                display_graph,
+                st.session_state.name_search_filter,
+                st.session_state.disease_curie
+            )
+            post_search_count = display_graph.number_of_nodes()
+            if post_search_count > 0:
+                matched_count = sum(
+                    1 for n in display_graph.nodes()
+                    if display_graph.nodes[n].get('in_filter', False)
+                )
+                st.info(
+                    f":material/search: Search '{st.session_state.name_search_filter}': "
+                    f"{matched_count} matches + {post_search_count - matched_count} connected nodes"
+                )
+            else:
+                st.warning(f":material/search_off: No nodes match '{st.session_state.name_search_filter}'")
 
         # Apply annotation filters if any are active
         if st.session_state.annotation_filters:
@@ -1681,7 +1803,7 @@ if st.session_state.graph:
         if viz_data:
             # Build dynamic key that changes when layout or filters change
             # This forces Cytoscape to re-run the layout algorithm instead of preserving old positions
-            # EXCLUDE styling-only parameters (base_node_size, use_metric_sizing, edge_width, collapse_counter)
+            # EXCLUDE styling-only parameters (base_node_size, edge_width, collapse_counter)
             # to preserve manual node positions when only visual properties change
 
             # Include annotation filter state in key so layout re-runs when filters change
@@ -1695,12 +1817,17 @@ if st.session_state.graph:
                 filter_hash = 0
 
             pub_filter_hash = hash(pub_filter) if pub_filter else 0
+            # Hash the name search filter (empty string = 0)
+            name_search_hash = hash(st.session_state.name_search_filter) if st.session_state.name_search_filter else 0
+
             # Only include graph structure and layout parameters in key
-            # Styling parameters (node size, edge width, collapse_counter) excluded to preserve positions
+            # Styling parameters (base_node_size, edge_width, collapse_counter) excluded to preserve positions
+            # Note: use_metric_sizing IS included because it changes node element data (_size_factor)
             cytoscape_key = (
                 f"biograph_network_{layout}_{filter_hash}_{category_filter}_{pub_filter_hash}_"
-                f"{max_intermediates}_{sizing_metric}"
-                # Note: base_node_size, use_metric_sizing, edge_width, collapse_counter excluded to preserve positions
+                f"{max_intermediates}_{sizing_metric}_{use_metric_sizing}_"
+                f"{st.session_state.gene_group_filter}_{name_search_hash}"
+                # Note: base_node_size, edge_width, collapse_counter excluded to preserve positions
             )
 
             # Compute priority predicate for edge collapsing

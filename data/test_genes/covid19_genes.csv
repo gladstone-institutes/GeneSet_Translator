@@ -1,11 +1,11 @@
-gene_symbol,description
-CD6,T-cell activation
-IFITM3,Interferon-induced transmembrane protein 3
-IFITM2,Interferon-induced transmembrane protein 2
-STAT5A,Signal transducer and activator of transcription 5A
-KLRG1,Killer cell lectin-like receptor G1
-DPP4,Dipeptidyl peptidase-4
-IL32,Interleukin 32
-PIK3AP1,Phosphoinositide-3-kinase adaptor protein 1
-FYN,FYN proto-oncogene
-IL4R,Interleukin 4 receptor
+gene_symbol,description,group
+CD6,T-cell activation,Immune_Signaling
+IFITM3,Interferon-induced transmembrane protein 3,Antiviral_Defense
+IFITM2,Interferon-induced transmembrane protein 2,Antiviral_Defense
+STAT5A,Signal transducer and activator of transcription 5A,Immune_Signaling
+KLRG1,Killer cell lectin-like receptor G1,Immune_Signaling
+DPP4,Dipeptidyl peptidase-4,Viral_Entry
+IL32,Interleukin 32,Immune_Signaling
+PIK3AP1,Phosphoinositide-3-kinase adaptor protein 1,Immune_Signaling
+FYN,FYN proto-oncogene,Immune_Signaling
+IL4R,Interleukin 4 receptor,Immune_Signaling

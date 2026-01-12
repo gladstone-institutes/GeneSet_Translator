@@ -59,7 +59,9 @@ class GraphBuilder:
         query_gene_curies: List[str],
         curie_to_symbol: Optional[Dict[str, str]] = None,
         curie_to_name: Optional[Dict[str, str]] = None,
+        curie_to_synonyms: Optional[Dict[str, List[str]]] = None,
         disease_bp_curies: Optional[List[str]] = None,
+        gene_group_map: Optional[Dict[str, str]] = None,
     ) -> KnowledgeGraph:
         """Build NetworkX MultiDiGraph from TRAPI edge list.
 
@@ -71,9 +73,13 @@ class GraphBuilder:
             curie_to_symbol: Optional mapping of gene CURIEs to original symbols
             curie_to_name: Optional mapping of CURIEs to human-readable names.
                 If provided, skips network lookup for names (uses cached names).
+            curie_to_synonyms: Optional mapping of CURIEs to synonym lists.
+                If not provided with curie_to_name, will be fetched from TCT.
             disease_bp_curies: Optional list of BiologicalProcess CURIEs that are
                 associated with the disease (from Stage 1 query). These will be
                 marked with is_disease_associated_bp=True for triangle rendering.
+            gene_group_map: Optional mapping of gene symbols to user-defined groups.
+                Used for filtering by gene groups.
 
         Returns:
             KnowledgeGraph with NetworkX DiGraph and metadata
@@ -110,10 +116,12 @@ class GraphBuilder:
         # Use cached names if provided, otherwise fetch from network
         if curie_to_name:
             curie_to_label = curie_to_name
+            # Use provided synonyms or empty dict
+            synonyms_dict = curie_to_synonyms or {}
             logger.info(f"Using {len(curie_to_label)} cached node names")
         else:
             logger.info(f"Looking up names for {len(unique_nodes)} unique nodes...")
-            curie_to_label = self._lookup_node_names(unique_nodes)
+            curie_to_label, synonyms_dict = self._lookup_node_names(unique_nodes)
 
         # Build NetworkX graph with CURIEs as node IDs
         # Use MultiDiGraph to preserve multiple edges between same node pair
@@ -165,7 +173,8 @@ class GraphBuilder:
 
         # Add node attributes
         self._add_node_attributes(
-            graph, query_gene_curies, curie_to_label, curie_to_symbol, disease_bp_curies
+            graph, query_gene_curies, curie_to_label, curie_to_symbol,
+            disease_bp_curies, synonyms_dict, gene_group_map
         )
 
         # Count categories
@@ -195,6 +204,8 @@ class GraphBuilder:
         curie_to_label: Dict[str, str],
         curie_to_symbol: Dict[str, str],
         disease_bp_curies: Optional[List[str]] = None,
+        curie_to_synonyms: Optional[Dict[str, List[str]]] = None,
+        gene_group_map: Optional[Dict[str, str]] = None,
     ) -> None:
         """Add rich attributes to graph nodes.
 
@@ -205,6 +216,8 @@ class GraphBuilder:
             - is_query_gene: Boolean flag for input genes
             - is_disease_associated_bp: Boolean flag for BiologicalProcesses from disease query
             - curie: Node identifier
+            - synonyms: List of alternative names for the node
+            - gene_group: User-defined group for query genes
 
         Extracted from notebook cell 18.
 
@@ -214,17 +227,27 @@ class GraphBuilder:
             curie_to_label: Dictionary mapping CURIEs to labels
             curie_to_symbol: Dictionary mapping CURIEs to original gene symbols
             disease_bp_curies: Optional list of disease-associated BiologicalProcess CURIEs
+            curie_to_synonyms: Optional dict mapping CURIEs to synonym lists
+            gene_group_map: Optional dict mapping gene symbols to user-defined groups
         """
         disease_bp_set = set(disease_bp_curies or [])
+        synonyms_dict = curie_to_synonyms or {}
+        group_map = gene_group_map or {}
 
         for node in graph.nodes():
             # Add label
             graph.nodes[node]["label"] = curie_to_label.get(node, node)
             graph.nodes[node]["curie"] = node
 
+            # Add synonyms for name search filtering
+            graph.nodes[node]["synonyms"] = synonyms_dict.get(node, [])
+
             # Add original symbol for query genes
             if node in curie_to_symbol:
                 graph.nodes[node]["original_symbol"] = curie_to_symbol[node]
+                # Add gene group if defined
+                symbol = curie_to_symbol[node]
+                graph.nodes[node]["gene_group"] = group_map.get(symbol, "Default")
 
             # Mark disease-associated BiologicalProcesses (for triangle rendering)
             graph.nodes[node]["is_disease_associated_bp"] = node in disease_bp_set
@@ -296,8 +319,8 @@ class GraphBuilder:
         return gene_frequency
 
 
-    def _lookup_node_names(self, curies: List[str]) -> Dict[str, str]:
-        """Look up human-readable names for CURIEs using TCT.
+    def _lookup_node_names(self, curies: List[str]) -> tuple[Dict[str, str], Dict[str, List[str]]]:
+        """Look up human-readable names and synonyms for CURIEs using TCT.
 
         Extracted from notebook cell 12.
 
@@ -305,11 +328,12 @@ class GraphBuilder:
             curies: List of CURIEs
 
         Returns:
-            Dictionary mapping CURIE to name
+            Tuple of (curie_to_name dict, curie_to_synonyms dict)
         """
         node_info_dict = name_resolver.batch_lookup(curies)
 
         curie_to_name = {}
+        curie_to_synonyms = {}
         for curie in curies:
             info = node_info_dict.get(curie)
             if info and hasattr(info, "name") and info.name:
@@ -318,7 +342,11 @@ class GraphBuilder:
                 # Use CURIE as fallback
                 curie_to_name[curie] = curie
 
-        return curie_to_name
+            # Extract synonyms if available
+            if info and hasattr(info, "synonyms") and info.synonyms:
+                curie_to_synonyms[curie] = info.synonyms
+
+        return curie_to_name, curie_to_synonyms
 
     def _extract_publications_robust(self, attributes: List[Dict[str, Any]]) -> List[str]:
         """Extract publications from all TRAPI patterns (top-level + nested).
