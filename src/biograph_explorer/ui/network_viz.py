@@ -12,7 +12,7 @@ Features:
 Phase 2 Status: Implemented with streamlit-cytoscape
 """
 
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Optional, List, Dict, Any, Union
 import networkx as nx
 from networkx.readwrite import json_graph
 from pathlib import Path
@@ -43,6 +43,13 @@ CATEGORY_COLORS = {
     "Cluster": "#005F45",        # Dark Green
     "Other": "#666666",          # Gray
 }
+
+# Edge color constants
+# Teal from Tableau colorblind-friendly palette (for publication highlighting)
+HIGHLIGHT_EDGE_COLOR = "#17BECF"
+# Default gray for non-highlighted edges
+DEFAULT_EDGE_COLOR = "#999999"
+
 # Get the absolute path to the assets directory
 _ASSETS_DIR = Path(__file__).parent.parent / "assets"
 
@@ -180,30 +187,67 @@ def _flatten_attributes_for_display(attributes: List[Dict[str, Any]]) -> List[st
 
 
 def prepare_cytoscape_elements(
-    graph: nx.DiGraph,
+    graph: Union[nx.DiGraph, nx.MultiDiGraph],
     query_genes: List[str],
     sizing_metric: str = "gene_frequency",
-    base_node_size: int = 30,
     use_metric_sizing: bool = True,
-    edge_width: int = 2,
 ) -> Dict[str, List[Dict]]:
     """Convert NetworkX graph to Cytoscape.js elements format.
 
     Uses nx.cytoscape_data() as base, then enriches with custom attributes.
+    Internal styling attributes are prefixed with '_' and automatically hidden
+    by streamlit-cytoscape's infopanel (controlled via hide_underscore_attrs parameter).
+
+    Supports both DiGraph and MultiDiGraph. For MultiDiGraph, each parallel edge
+    becomes a separate Cytoscape element with its own attributes.
 
     Args:
-        graph: NetworkX DiGraph to convert
+        graph: NetworkX graph to convert (DiGraph or MultiDiGraph)
         query_genes: List of query gene node IDs (for highlighting)
         sizing_metric: Metric for node sizing (gene_frequency, pagerank, betweenness, degree)
-        base_node_size: Base size for nodes in pixels (default: 30)
         use_metric_sizing: If True, size nodes by metric; if False, use uniform size
-        edge_width: Width of edges in pixels (default: 2)
 
     Returns:
         Dictionary with "nodes" and "edges" lists in Cytoscape.js format
     """
     # Get base Cytoscape format from NetworkX
-    cyto_data = json_graph.cytoscape_data(graph)
+    # First, create a copy without non-serializable, complex, or internal attributes
+    graph_copy = graph.copy()
+    # Exclude attributes that shouldn't be in Cytoscape element data:
+    # - translator_node: TranslatorNode objects can't be JSON serialized
+    # - node_annotations: legacy attribute with nested dicts (replaced by annotation_features)
+    # - annotation_features: we add clean formatted version to element data instead
+    # - is_query_gene, is_disease_associated_bp: internal flags (we add prefixed versions)
+    # - curie, value: redundant with 'id'
+    exclude_attrs = {
+        'translator_node', 'node_annotations', 'annotation_features',
+        'is_query_gene', 'is_disease_associated_bp', 'curie', 'value',
+        'hpa_annotation', 'hpa_cell_type_ncpm', 'hpa_tissue_ntpm', 'hpa_immune_cell_ntpm',  # HPA objects (non-serializable)
+    }
+    for node in graph_copy.nodes():
+        for attr in exclude_attrs:
+            if attr in graph_copy.nodes[node]:
+                del graph_copy.nodes[node][attr]
+
+    # Exclude edge attributes that will be replaced with formatted versions
+    # These raw arrays/dicts would display as [object Object] in the info panel
+    edge_exclude_attrs = {
+        'attributes', 'sources', 'qualifiers', 'confidence_scores',
+        'sentences', 'publications', 'knowledge_source', 'query_result_id'
+    }
+    # Handle both DiGraph and MultiDiGraph edge access
+    if isinstance(graph_copy, nx.MultiDiGraph):
+        for u, v, key in graph_copy.edges(keys=True):
+            for attr in list(graph_copy[u][v][key].keys()):
+                if attr in edge_exclude_attrs:
+                    del graph_copy[u][v][key][attr]
+    else:
+        for u, v in graph_copy.edges():
+            for attr in list(graph_copy[u][v].keys()):
+                if attr in edge_exclude_attrs:
+                    del graph_copy[u][v][attr]
+
+    cyto_data = json_graph.cytoscape_data(graph_copy)
     elements = cyto_data["elements"]
 
     # Calculate metric values for sizing
@@ -226,91 +270,119 @@ def prepare_cytoscape_elements(
         normalized_metrics = {node: 0.5 for node in graph.nodes()}
 
     # Enrich nodes with custom attributes
+    # Attributes prefixed with '_' are internal styling attributes (hidden from infopanel by default)
     for node_element in elements["nodes"]:
         node_id = node_element["data"]["id"]
         node_attrs = graph.nodes[node_id]
 
-        # Add category as label (for NodeStyle matching)
+        # Add category as label (for NodeStyle matching) - internal, hidden from user
         category = node_attrs.get("category", "Other")
         node_element["data"]["label"] = category  # Used by NodeStyle for matching
+        # Also add as 'category' for user display
+        node_element["data"]["category"] = category
 
         # Add display name (for caption)
         original_symbol = node_attrs.get("original_symbol", "")
         display_label = node_attrs.get("label", node_id)
         node_element["data"]["name"] = original_symbol if original_symbol else display_label
 
-        # Add query gene flag
+        # Add query gene flag (internal - for styling)
         is_query_gene = node_attrs.get("is_query_gene", False)
-        node_element["data"]["is_query_gene"] = is_query_gene
+        node_element["data"]["_is_query_gene"] = is_query_gene
 
-        # Check if this is a disease-associated BiologicalProcess (from Stage 1 query)
+        # Check if this is a disease-associated BiologicalProcess (internal - for styling)
         is_disease_bp = node_attrs.get("is_disease_associated_bp", False)
-        node_element["data"]["is_disease_associated_bp"] = is_disease_bp
+        node_element["data"]["_is_disease_associated_bp"] = is_disease_bp
 
-        # Set shape: triangles for query genes AND disease-associated BPs (query-derived nodes)
+        # Set shape: triangles for query genes AND disease-associated BPs (internal - for styling)
         use_triangle = is_query_gene or is_disease_bp
-        node_element["data"]["node_shape"] = "triangle" if use_triangle else "ellipse"
+        node_element["data"]["_node_shape"] = "triangle" if use_triangle else "ellipse"
 
-        # Adjust icon sizing/position for triangles (icons need to be smaller and shifted down)
+        # Adjust icon sizing/position for triangles (internal - for styling)
         if use_triangle:
-            node_element["data"]["bg_width"] = "55%"
-            node_element["data"]["bg_height"] = "55%"
-            node_element["data"]["bg_position_y"] = "80%"
+            node_element["data"]["_bg_width"] = "55%"
+            node_element["data"]["_bg_height"] = "55%"
+            node_element["data"]["_bg_position_y"] = "80%"
         else:
-            node_element["data"]["bg_width"] = "70%"
-            node_element["data"]["bg_height"] = "70%"
-            node_element["data"]["bg_position_y"] = "50%"
+            node_element["data"]["_bg_width"] = "70%"
+            node_element["data"]["_bg_height"] = "70%"
+            node_element["data"]["_bg_position_y"] = "50%"
 
-        # Calculate node size
+        # Store normalized size factor (0-1) instead of absolute size
+        # This keeps node elements stable when base_node_size changes
         if use_metric_sizing:
-            # Scale around base_node_size: range is base_node_size ± 15px
-            min_size = max(10, base_node_size - 15)
-            max_size = base_node_size + 15
-            size_range = max_size - min_size
-            node_size = min_size + (normalized_metrics.get(node_id, 0.5) * size_range)
+            # Normalized metric value (0-1)
+            size_factor = normalized_metrics.get(node_id, 0.5)
         else:
-            # Uniform sizing - all nodes same size
-            node_size = base_node_size
+            # Uniform sizing - all nodes same factor
+            size_factor = 1.0
 
-        # Query-derived nodes (triangles) get larger size (10% bigger, minimum base_node_size)
+        # Query-derived nodes (triangles) get larger size factor (10% boost)
         if use_triangle:
-            node_size = max(node_size * 1.1, base_node_size)
+            size_factor = min(size_factor * 1.1, 1.0)
 
-        node_element["data"]["size"] = round(node_size, 1)
+        # Store the size factor (stable across base_node_size changes)
+        node_element["data"]["_size_factor"] = round(size_factor, 3)
 
-        # Calculate font size proportional to node size (8-14px range)
-        font_size = max(8, min(14, round(node_size * 0.25)))
-        node_element["data"]["font_size"] = font_size
-
-        # Add metrics for tooltip/inspection
+        # Add metrics for tooltip/inspection (user-facing)
         node_element["data"]["gene_frequency"] = node_attrs.get("gene_frequency", 0)
         node_element["data"]["pagerank"] = node_attrs.get("pagerank", 0)
         node_element["data"]["betweenness"] = node_attrs.get("betweenness", 0)
         node_element["data"]["degree"] = graph.degree(node_id)
 
-        # Add cluster membership flag (for opacity styling when viewing individual clusters)
+        # Add cluster membership flag (internal - for opacity styling)
         in_cluster = node_attrs.get("in_cluster", True)
-        node_element["data"]["in_cluster"] = in_cluster
-        # Reduce opacity for nodes from other clusters (connected but not native)
-        node_element["data"]["opacity"] = 1.0 if in_cluster else 0.6
+        node_element["data"]["_in_cluster"] = in_cluster
+        # Reduce opacity for nodes from other clusters (internal - for styling)
+        node_element["data"]["_opacity"] = 1.0 if in_cluster else 0.6
+
+        # Add annotation features as top-level fields for tooltip display (user-facing)
+        # Using 'ann_' prefix to avoid conflicts with existing fields
+        # Each field is a primitive (string/number) so Cytoscape.js can render it directly
+        annotation_features = node_attrs.get('annotation_features', {})
+        if annotation_features:
+            for key, value in annotation_features.items():
+                if isinstance(value, list):
+                    # Format lists as readable strings
+                    count = len(value)
+                    if count <= 3:
+                        formatted = ', '.join(str(v) for v in value)
+                    else:
+                        formatted = f"{', '.join(str(v) for v in value[:3])}... ({count} total)"
+                    node_element["data"][f"ann_{key}"] = formatted
+                else:
+                    node_element["data"][f"ann_{key}"] = value
 
     # Enrich edges with custom attributes
+    # Attributes prefixed with '_' are internal styling attributes (hidden from infopanel by default)
     for idx, edge_element in enumerate(elements["edges"]):
         source = edge_element["data"]["source"]
         target = edge_element["data"]["target"]
 
-        # Add unique ID for streamlit-cytoscape (REQUIRED)
+        # Add unique ID for streamlit-cytoscape (REQUIRED by Cytoscape.js)
+        # Note: 'id' must remain unprefixed as it's a structural requirement, not just display
         edge_element["data"]["id"] = f"e{idx}"
 
-        # Get edge data from graph
+        # Get edge data from graph - handle both DiGraph and MultiDiGraph
         if graph.has_edge(source, target):
-            edge_attrs = graph[source][target]
+            if isinstance(graph, nx.MultiDiGraph):
+                # For MultiDiGraph, cytoscape_data preserves 'key' in edge element data
+                edge_key = edge_element["data"].get("key")
+                edge_dict = graph[source][target]
+                if edge_key and edge_key in edge_dict:
+                    edge_attrs = edge_dict[edge_key]
+                else:
+                    # Fallback to first edge (shouldn't happen with proper key handling)
+                    edge_attrs = next(iter(edge_dict.values()))
+            else:
+                edge_attrs = graph[source][target]
 
-            # Add predicate (cleaned) - always show
+            # Add predicate (cleaned) as label - user-facing
             predicate = edge_attrs.get("predicate", "")
             edge_element["data"]["label"] = predicate.replace("biolink:", "")
+            # Store full predicate as internal (redundant with label)
             if predicate:
-                edge_element["data"]["predicate"] = predicate
+                edge_element["data"]["_predicate"] = predicate
 
             # Add full sources information (formatted as readable strings)
             sources = edge_attrs.get("sources", [])
@@ -456,33 +528,53 @@ def prepare_cytoscape_elements(
                 if qualified_predicate and object_direction and object_aspect:
                     edge_element["data"]["qualified_relationship"] = f"{qualified_predicate} {object_direction} {object_aspect}"
 
-            # Add complete attributes array (formatted as readable text)
+            # Add complete attributes array (formatted as readable text) - internal/debug
             attributes = edge_attrs.get("attributes", [])
             if attributes:
                 # Format attributes using helper function
                 attributes_text = _flatten_attributes_for_display(attributes)
                 if attributes_text:  # Only add if non-empty
-                    edge_element["data"]["attributes"] = "; ".join(attributes_text)
+                    edge_element["data"]["_attributes"] = "; ".join(attributes_text)
 
-            # Add query_result_id only if present
+            # Add query_result_id only if present - internal
             query_result_id = edge_attrs.get("query_result_id")
             if query_result_id is not None:
-                edge_element["data"]["query_result_id"] = query_result_id
+                edge_element["data"]["_query_result_id"] = query_result_id
 
-        # Add edge width and scaled font size
-        edge_element["data"]["edge_width"] = edge_width
-        # Scale font: 8px at width 1, up to 14px at width 10
-        edge_font_size = max(8, min(14, 6 + edge_width))
-        edge_element["data"]["edge_font_size"] = edge_font_size
+            # Set edge color based on publication highlight filter
+            has_filtered_pub = edge_attrs.get('_has_filtered_pub', False)
+
+            # Store flag in data for debugging/info panel
+            edge_element["data"]["_has_filtered_pub"] = has_filtered_pub
+
+        # Add edge color - internal styling
+        # This sets the color directly in the edge data, which survives collapse/expand
+        # Publication-filtered edges get teal, others get default gray
+        if edge_attrs.get('_has_filtered_pub', False):
+            edge_element["data"]["_line_color"] = HIGHLIGHT_EDGE_COLOR
+            edge_element["data"]["_target_arrow_color"] = HIGHLIGHT_EDGE_COLOR
+        else:
+            edge_element["data"]["_line_color"] = DEFAULT_EDGE_COLOR
+            edge_element["data"]["_target_arrow_color"] = DEFAULT_EDGE_COLOR
+
+    # Note: Internal styling attributes are prefixed with '_' and automatically
+    # hidden by streamlit-cytoscape's infopanel (hide_underscore_attrs=True by default).
+    # The debug_mode parameter can be passed to streamlit_cytoscape() to control this.
 
     return {"nodes": elements["nodes"], "edges": elements["edges"]}
 
 
-def create_node_styles(graph: nx.DiGraph) -> List["NodeStyle"]:
+def create_node_styles(
+    graph: Union[nx.DiGraph, nx.MultiDiGraph],
+    base_node_size: int = 30,
+    use_metric_sizing: bool = True
+) -> List["NodeStyle"]:
     """Create NodeStyle objects for each category in the graph.
 
     Args:
         graph: NetworkX graph containing nodes with "category" attribute
+        base_node_size: Base size for nodes in pixels (default: 30)
+        use_metric_sizing: Whether to use metric-based sizing (default: True)
 
     Returns:
         List of NodeStyle objects, one per unique category
@@ -496,18 +588,32 @@ def create_node_styles(graph: nx.DiGraph) -> List["NodeStyle"]:
         category = graph.nodes[node].get("category", "Other")
         categories.add(category)
 
+    # Calculate size range based on base_node_size and metric sizing
+    if use_metric_sizing:
+        # Scale around base_node_size: range is base_node_size ± 15px
+        min_size = max(10, base_node_size - 15)
+        max_size = base_node_size + 15
+    else:
+        # Uniform sizing - all nodes same size
+        min_size = base_node_size
+        max_size = base_node_size
+
+    # Calculate font size range (proportional to node size)
+    min_font = max(8, round(min_size * 0.25))
+    max_font = min(14, round(max_size * 0.25))
+
     # Create NodeStyle for each category
-    # custom_styles enables dynamic node sizing from node data
+    # Use mapData to calculate size from _size_factor (keeps elements stable)
     node_styles = []
     for category in sorted(categories):
         color = CATEGORY_COLORS.get(category, CATEGORY_COLORS["Other"])
         icon = CATEGORY_ICONS.get(category)
 
         # Use "name" as caption (displays gene symbol or node label)
-        # custom_styles reads size from node data for dynamic sizing
-        # Label styling: dynamic font size + background box for visibility
+        # mapData calculates size from _size_factor (0-1) * size range
+        # This keeps node elements stable when base_node_size changes
         label_styles = {
-            "font-size": "data(font_size)",
+            "font-size": f"mapData(_size_factor, 0, 1, {min_font}, {max_font})",
             "text-background-color": "#ffffff",
             "text-background-opacity": 0.95,
             "text-background-padding": "2px",
@@ -522,13 +628,13 @@ def create_node_styles(graph: nx.DiGraph) -> List["NodeStyle"]:
                     caption="name",
                     icon=icon,
                     custom_styles={
-                        "width": "data(size)",
-                        "height": "data(size)",
-                        "shape": "data(node_shape)",
-                        "background-width": "data(bg_width)",
-                        "background-height": "data(bg_height)",
-                        "background-position-y": "data(bg_position_y)",
-                        "opacity": "data(opacity)",
+                        "width": f"mapData(_size_factor, 0, 1, {min_size}, {max_size})",
+                        "height": f"mapData(_size_factor, 0, 1, {min_size}, {max_size})",
+                        "shape": "data(_node_shape)",
+                        "background-width": "data(_bg_width)",
+                        "background-height": "data(_bg_height)",
+                        "background-position-y": "data(_bg_position_y)",
+                        "opacity": "data(_opacity)",
                         **label_styles,
                     }
                 )
@@ -540,10 +646,10 @@ def create_node_styles(graph: nx.DiGraph) -> List["NodeStyle"]:
                     color=color,
                     caption="name",
                     custom_styles={
-                        "width": "data(size)",
-                        "height": "data(size)",
-                        "shape": "data(node_shape)",
-                        "opacity": "data(opacity)",
+                        "width": f"mapData(_size_factor, 0, 1, {min_size}, {max_size})",
+                        "height": f"mapData(_size_factor, 0, 1, {min_size}, {max_size})",
+                        "shape": "data(_node_shape)",
+                        "opacity": "data(_opacity)",
                         **label_styles,
                     }
                 )
@@ -552,11 +658,27 @@ def create_node_styles(graph: nx.DiGraph) -> List["NodeStyle"]:
     return node_styles
 
 
-def create_edge_styles(graph: nx.DiGraph) -> List["EdgeStyle"]:
+def calculate_edge_font_size(edge_width: int) -> int:
+    """Calculate edge label font size based on edge width.
+
+    Uses consistent formula across both EdgeStyle and meta-edge styling.
+    Font scales from 8px at width 1, up to 14px at width 10.
+
+    Args:
+        edge_width: Edge width in pixels (1-10)
+
+    Returns:
+        Font size in pixels (8-14)
+    """
+    return max(8, min(14, 6 + edge_width))
+
+
+def create_edge_styles(graph: Union[nx.DiGraph, nx.MultiDiGraph], edge_width: int = 2) -> List["EdgeStyle"]:
     """Create EdgeStyle objects for each predicate in the graph.
 
     Args:
         graph: NetworkX graph containing edges with "predicate" attribute
+        edge_width: Edge width in pixels (default: 2)
 
     Returns:
         List of EdgeStyle objects, one per unique predicate
@@ -571,10 +693,16 @@ def create_edge_styles(graph: nx.DiGraph) -> List["EdgeStyle"]:
         if predicate:
             predicates.add(predicate)
 
-    # Edge styling: dynamic width and font size
+    # Edge styling: static width and font size, dynamic color
+    # Width and font size are static values applied uniformly to all edges
+    # Colors are set per-edge in prepare_cytoscape_elements() via _line_color data attribute
+    # This allows publication-filtered edges to be teal while others use default colors
+    edge_font_size = calculate_edge_font_size(edge_width)
     edge_custom_styles = {
-        "width": "data(edge_width)",
-        "font-size": "data(edge_font_size)",
+        "width": edge_width,  # Static value
+        "font-size": edge_font_size,  # Static value
+        "line-color": "data(_line_color)",
+        "target-arrow-color": "data(_target_arrow_color)",
     }
 
     # Create EdgeStyle for each predicate
@@ -601,6 +729,37 @@ def create_edge_styles(graph: nx.DiGraph) -> List["EdgeStyle"]:
         )
 
     return edge_styles
+
+
+class RawCytoscapeStyle:
+    """Wrapper for raw Cytoscape.js style objects.
+
+    Allows passing raw style dictionaries to streamlit-cytoscape alongside
+    NodeStyle/EdgeStyle objects by implementing the .dump() interface.
+    """
+
+    def __init__(self, selector: str, style: Dict[str, Any]):
+        """Initialize with raw selector and style.
+
+        Args:
+            selector: Cytoscape.js selector string (e.g., 'edge.highlighted_pub')
+            style: Dictionary of Cytoscape.js style properties
+        """
+        self.selector = selector
+        self.style = style
+
+    def dump(self) -> Dict[str, Any]:
+        """Return the raw style object for streamlit-cytoscape."""
+        return {
+            "selector": self.selector,
+            "style": self.style,
+        }
+
+
+# DEPRECATED: Removed in favor of per-edge color styling via data attributes
+# Edge colors are now set directly in prepare_cytoscape_elements() using
+# _line_color and _target_arrow_color data attributes, which are more reliable
+# for edges that may be collapsed/expanded by the edge collapsing feature.
 
 
 def get_layout_config(layout_name: str = "dagre") -> Dict[str, Any]:
@@ -707,7 +866,7 @@ def get_layout_config(layout_name: str = "dagre") -> Dict[str, Any]:
 
 
 def render_network_visualization(
-    graph: nx.DiGraph,
+    graph: Union[nx.DiGraph, nx.MultiDiGraph],
     query_genes: List[str],
     sizing_metric: str = "gene_frequency",
     layout: str = "dagre",
@@ -721,7 +880,7 @@ def render_network_visualization(
     """Prepare network visualization data for streamlit-cytoscape component.
 
     Args:
-        graph: NetworkX DiGraph to visualize
+        graph: NetworkX graph to visualize (DiGraph or MultiDiGraph)
         query_genes: List of query gene node IDs (highlighted)
         sizing_metric: Node sizing metric (gene_frequency, pagerank, betweenness, degree)
         layout: Layout algorithm name (cose, fcose, circle, grid, breadthfirst, concentric)
@@ -759,12 +918,18 @@ def render_network_visualization(
 
         # Prepare Cytoscape elements
         elements = prepare_cytoscape_elements(
-            graph, query_genes, sizing_metric, base_node_size, use_metric_sizing, edge_width
+            graph, query_genes, sizing_metric, use_metric_sizing
         )
 
         # Create node and edge styles
-        node_styles = create_node_styles(graph)
-        edge_styles = create_edge_styles(graph)
+        node_styles = create_node_styles(graph, base_node_size=base_node_size, use_metric_sizing=use_metric_sizing)
+        edge_styles = create_edge_styles(graph, edge_width=edge_width)
+
+        # Note: Element stability for collapse state preservation:
+        # - Edge colors: Set per-edge via _line_color/_target_arrow_color (for pub filtering)
+        # - Edge width/font: Applied statically via EdgeStyle (not in element data)
+        # - Node size/font: Calculated via mapData from stable _size_factor (not absolute size)
+        # This keeps elements stable across slider changes, preserving meta-edge collapse
 
         # Get layout configuration
         layout_config = get_layout_config(layout)
@@ -784,11 +949,11 @@ def render_network_visualization(
 
 
 def sample_graph_for_visualization(
-    graph: nx.DiGraph,
+    graph: Union[nx.DiGraph, nx.MultiDiGraph],
     query_genes: List[str],
     max_intermediates: int = 200,
     disease_curie: Optional[str] = None,
-) -> nx.DiGraph:
+) -> Union[nx.DiGraph, nx.MultiDiGraph]:
     """Sample graph by filtering top intermediate nodes ranked by query gene connectivity.
 
     Sampling strategy:
@@ -800,7 +965,7 @@ def sample_graph_for_visualization(
     6. Build subgraph with selected nodes + their edges
 
     Args:
-        graph: Full NetworkX graph
+        graph: Full NetworkX graph (DiGraph or MultiDiGraph)
         query_genes: Query gene node IDs (always included)
         max_intermediates: Maximum number of intermediate nodes to include (default: 200)
         disease_curie: Optional disease CURIE (always included if present)
@@ -879,12 +1044,12 @@ def sample_graph_for_visualization(
     return sampled_graph
 
 
-def get_node_details(node_id: str, graph: nx.DiGraph) -> Dict[str, Any]:
+def get_node_details(node_id: str, graph: Union[nx.DiGraph, nx.MultiDiGraph]) -> Dict[str, Any]:
     """Extract detailed information about a node.
 
     Args:
         node_id: Node identifier (CURIE)
-        graph: NetworkX graph containing the node
+        graph: NetworkX graph containing the node (DiGraph or MultiDiGraph)
 
     Returns:
         Dictionary with node details including edges and sources
@@ -942,79 +1107,468 @@ def get_node_details(node_id: str, graph: nx.DiGraph) -> Dict[str, Any]:
     }
 
 
-def create_clustered_graph(
-    graph: nx.DiGraph, clustering_results, query_genes: List[str]
-) -> nx.DiGraph:
-    """Create a meta-graph where nodes represent clusters.
+def filter_graph_by_annotations(
+    graph: Union[nx.DiGraph, nx.MultiDiGraph],
+    annotation_filters: Dict[str, List[Any]],
+) -> Union[nx.DiGraph, nx.MultiDiGraph]:
+    """Filter graph by annotation attributes.
+
+    Filtering strategy:
+    1. Find nodes matching ALL selected annotation criteria (AND logic)
+    2. Include only matched nodes plus disease nodes (always preserved)
+    3. Edges between included nodes are preserved
 
     Args:
-        graph: Original NetworkX graph
-        clustering_results: ClusteringResults from clustering_engine
-        query_genes: List of query gene node IDs
+        graph: Full NetworkX graph (DiGraph or MultiDiGraph)
+        annotation_filters: Dict of filter_key -> list of selected values.
+            Example: {"go_bp": ["cell cycle"], "go_mf": ["ATP binding"]}
 
     Returns:
-        Meta-graph with cluster nodes
+        Filtered subgraph with 'in_filter' attribute marking matched nodes
     """
-    meta_graph = nx.DiGraph()
+    if not annotation_filters:
+        return graph
 
-    # Create a node for each community
-    for community in clustering_results.communities:
-        cluster_id = f"cluster_{community.community_id}"
+    # Remove empty filters
+    active_filters = {k: v for k, v in annotation_filters.items() if v}
+    if not active_filters:
+        return graph
 
-        # Get cluster statistics
-        cluster_nodes = community.nodes
-        subgraph = graph.subgraph(cluster_nodes)
+    logger.info(f"Filtering graph by annotations: {active_filters}")
 
-        # Count query genes in cluster
-        query_genes_in_cluster = [n for n in cluster_nodes if n in query_genes]
+    # Find nodes matching ALL filters (AND logic)
+    matched_nodes = set()
+    for node in graph.nodes():
+        node_attrs = graph.nodes[node]
+        matches_all = True
 
-        # Get top nodes by PageRank
-        top_nodes = community.top_nodes[:5] if community.top_nodes else []
-        top_labels = [node_info.get("label", "") for node_info in top_nodes]
+        for filter_key, selected_values in active_filters.items():
+            # Get node's annotation feature value for this filter
+            annotation_features = node_attrs.get('annotation_features', {})
+            node_value = annotation_features.get(filter_key)
 
-        # Add meta-node
-        meta_graph.add_node(
-            cluster_id,
-            label=f"Cluster {community.community_id}\n({len(cluster_nodes)} nodes)",
-            original_symbol="",  # No original symbol for clusters
-            category="Cluster",  # Special category for clusters
-            is_query_gene=False,
-            size=len(cluster_nodes),
-            density=community.density,
-            top_nodes=top_labels,
-            query_gene_count=len(query_genes_in_cluster),
-            node_ids=cluster_nodes,  # Store original node IDs
-            # Metrics for visualization
-            gene_frequency=len(query_genes_in_cluster),
-            pagerank=0,
-            betweenness=0,
-        )
+            if node_value is None:
+                matches_all = False
+                break
 
-    # Add edges between clusters
-    community_map = {}  # node_id → community_id
-    for community in clustering_results.communities:
-        for node in community.nodes:
-            community_map[node] = community.community_id
+            # Handle list-valued attributes (e.g., go_bp, go_mf, go_cc, alias, hpa_top_cell_types)
+            if isinstance(node_value, list):
+                # Check if it's a list of tuples (HPA top_cell_types format: [('name', value), ...])
+                if node_value and isinstance(node_value[0], (tuple, list)):
+                    # Extract first element of each tuple (the name)
+                    node_value_strs = {str(v[0]) for v in node_value}
+                else:
+                    # Regular list of values
+                    node_value_strs = {str(v) for v in node_value}
 
-    # Count inter-cluster edges
-    inter_cluster_edges = {}  # (comm1, comm2) → count
+                # Check if ANY of the node's values match ANY selected value
+                if not node_value_strs.intersection(selected_values):
+                    matches_all = False
+                    break
+            else:
+                # Scalar value - check for exact match
+                if str(node_value) not in selected_values:
+                    matches_all = False
+                    break
 
-    for src, tgt in graph.edges():
-        src_comm = community_map.get(src)
-        tgt_comm = community_map.get(tgt)
+        if matches_all:
+            matched_nodes.add(node)
 
-        if src_comm is not None and tgt_comm is not None and src_comm != tgt_comm:
-            edge_key = tuple(sorted([src_comm, tgt_comm]))
-            inter_cluster_edges[edge_key] = inter_cluster_edges.get(edge_key, 0) + 1
+    # Always include disease nodes (they don't have GO annotations but are important)
+    disease_nodes = {
+        node for node in graph.nodes()
+        if graph.nodes[node].get('category') == 'Disease'
+    }
 
-    # Add inter-cluster edges to meta-graph
-    for (comm1, comm2), count in inter_cluster_edges.items():
-        meta_graph.add_edge(
-            f"cluster_{comm1}",
-            f"cluster_{comm2}",
-            predicate=f"{count} edges",
-            weight=count,
-            label=f"{count} edges",
-        )
+    # Identify query genes
+    query_genes = {
+        node for node in graph.nodes()
+        if graph.nodes[node].get('is_query_gene', False)
+    }
 
-    return meta_graph
+    if not matched_nodes:
+        logger.warning("No nodes match annotation filters - returning empty graph")
+        # Return empty graph of same type as input
+        return type(graph)()
+
+    # Build node set:
+    # 1. Matched nodes (intermediates that pass the filter)
+    # 2. Disease nodes (always included)
+    # 3. Query genes connected to matched nodes
+    nodes_to_include = set(matched_nodes)
+    nodes_to_include.update(disease_nodes)
+
+    # Add query genes that are connected to matched intermediate nodes
+    for node in matched_nodes:
+        for neighbor in graph.predecessors(node):
+            if neighbor in query_genes:
+                nodes_to_include.add(neighbor)
+        for neighbor in graph.successors(node):
+            if neighbor in query_genes:
+                nodes_to_include.add(neighbor)
+
+    # Create subgraph with selected nodes
+    filtered_graph = graph.subgraph(nodes_to_include).copy()
+
+    # Mark nodes for styling (matched vs connected neighbor)
+    for node in filtered_graph.nodes():
+        filtered_graph.nodes[node]['in_filter'] = node in matched_nodes
+
+    logger.info(
+        f"Annotation filter result: {len(matched_nodes)} matched nodes, "
+        f"{filtered_graph.number_of_nodes()} total nodes (with connections), "
+        f"{filtered_graph.number_of_edges()} edges"
+    )
+
+    return filtered_graph
+
+
+def filter_graph_by_category(
+    graph: Union[nx.DiGraph, nx.MultiDiGraph],
+    selected_category: str,
+    query_genes: List[str],
+    disease_curie: Optional[str] = None,
+) -> Union[nx.DiGraph, nx.MultiDiGraph]:
+    """Filter graph to show only intermediates of the selected category.
+
+    Strategy:
+    1. Find all nodes matching the selected category (intermediates)
+    2. Include query genes ONLY if they connect to at least one category node
+    3. Always include disease node if present and connected
+    4. Preserve edges between included nodes
+
+    Args:
+        graph: Full NetworkX graph (DiGraph or MultiDiGraph)
+        selected_category: Category to filter by (e.g., "Protein", "BiologicalProcess")
+        query_genes: Query gene CURIEs (included only if connected to category)
+        disease_curie: Optional disease CURIE (always included if present)
+
+    Returns:
+        Filtered subgraph with only selected category intermediates
+    """
+    if not selected_category:
+        return graph
+
+    query_gene_set = set(query_genes) if query_genes else set()
+
+    # Find intermediate nodes matching the selected category (excluding query genes)
+    # Query genes are handled separately to avoid orphans when filtering by "Gene"
+    category_intermediates = set()
+    for node in graph.nodes():
+        if graph.nodes[node].get('category') == selected_category:
+            if node not in query_gene_set:
+                category_intermediates.add(node)
+
+    if not category_intermediates:
+        logger.warning(f"No intermediate nodes match category '{selected_category}'")
+        # Return empty graph of same type instead of original
+        if isinstance(graph, nx.MultiDiGraph):
+            return nx.MultiDiGraph()
+        return nx.DiGraph()
+
+    nodes_to_include = set(category_intermediates)
+
+    # Include query genes only if they connect to at least one category intermediate
+    for query_gene in query_gene_set:
+        if query_gene not in graph:
+            continue
+        # Check if this query gene has any edge to/from a category intermediate
+        neighbors = set(graph.predecessors(query_gene)) | set(graph.successors(query_gene))
+        if neighbors & category_intermediates:
+            nodes_to_include.add(query_gene)
+
+    # Include disease node if it connects to category intermediates (prevents orphans)
+    if disease_curie and disease_curie in graph:
+        disease_neighbors = set(graph.predecessors(disease_curie)) | set(graph.successors(disease_curie))
+        if disease_neighbors & category_intermediates:
+            nodes_to_include.add(disease_curie)
+
+    filtered_graph = graph.subgraph(nodes_to_include).copy()
+
+    logger.info(
+        f"Category filter '{selected_category}': {filtered_graph.number_of_nodes()} nodes, "
+        f"{filtered_graph.number_of_edges()} edges"
+    )
+
+    return filtered_graph
+
+
+def filter_graph_by_name_search(
+    graph: Union[nx.DiGraph, nx.MultiDiGraph],
+    search_term: str,
+    disease_curie: Optional[str] = None,
+) -> Union[nx.DiGraph, nx.MultiDiGraph]:
+    """Filter graph by node name search (case-insensitive).
+
+    Searches node label, original_symbol, synonyms, and annotation aliases.
+    Returns matching nodes plus their direct connections and disease node.
+
+    Args:
+        graph: Full NetworkX graph (DiGraph or MultiDiGraph)
+        search_term: Search string (case-insensitive substring match)
+        disease_curie: Disease CURIE (always included if present)
+
+    Returns:
+        Filtered subgraph with matching nodes + their connections + disease
+    """
+    if not search_term or not search_term.strip():
+        return graph
+
+    search_lower = search_term.strip().lower()
+
+    # Find nodes matching the search term
+    matched_nodes = set()
+
+    for node in graph.nodes():
+        node_attrs = graph.nodes[node]
+
+        # Check label
+        label = node_attrs.get('label', '')
+        if label and search_lower in label.lower():
+            matched_nodes.add(node)
+            continue
+
+        # Check original_symbol (for query genes)
+        original_symbol = node_attrs.get('original_symbol', '')
+        if original_symbol and search_lower in original_symbol.lower():
+            matched_nodes.add(node)
+            continue
+
+        # Check synonyms
+        synonyms = node_attrs.get('synonyms', [])
+        if synonyms:
+            for syn in synonyms:
+                if syn and search_lower in syn.lower():
+                    matched_nodes.add(node)
+                    break
+            if node in matched_nodes:
+                continue
+
+        # Check annotation aliases (from Node Annotator)
+        annotation_features = node_attrs.get('annotation_features', {})
+        aliases = annotation_features.get('alias', [])
+        if aliases:
+            for alias in aliases:
+                if alias and search_lower in str(alias).lower():
+                    matched_nodes.add(node)
+                    break
+
+    if not matched_nodes:
+        logger.warning(f"No nodes match search term '{search_term}'")
+        # Return empty graph of same type
+        if isinstance(graph, nx.MultiDiGraph):
+            return nx.MultiDiGraph()
+        return nx.DiGraph()
+
+    # Build node set: matched nodes + their direct neighbors
+    nodes_to_include = set(matched_nodes)
+
+    # Add direct neighbors of matched nodes (both directions)
+    for node in matched_nodes:
+        for neighbor in graph.predecessors(node):
+            nodes_to_include.add(neighbor)
+        for neighbor in graph.successors(node):
+            nodes_to_include.add(neighbor)
+
+    # Always include disease node if present
+    if disease_curie and disease_curie in graph:
+        nodes_to_include.add(disease_curie)
+
+    # Create subgraph
+    filtered_graph = graph.subgraph(nodes_to_include).copy()
+
+    # Mark nodes for styling (matched vs connected neighbor)
+    for node in filtered_graph.nodes():
+        filtered_graph.nodes[node]['in_filter'] = node in matched_nodes
+
+    logger.info(
+        f"Name search filter '{search_term}': {len(matched_nodes)} matched nodes, "
+        f"{filtered_graph.number_of_nodes()} total nodes (with connections), "
+        f"{filtered_graph.number_of_edges()} edges"
+    )
+
+    return filtered_graph
+
+
+def filter_graph_by_gene_group(
+    graph: Union[nx.DiGraph, nx.MultiDiGraph],
+    selected_group: str,
+    gene_to_group: Dict[str, str],
+    curie_to_symbol: Dict[str, str],
+    disease_curie: Optional[str] = None,
+) -> Union[nx.DiGraph, nx.MultiDiGraph]:
+    """Filter graph to show only genes in selected group + their network.
+
+    Args:
+        graph: Full NetworkX graph (DiGraph or MultiDiGraph)
+        selected_group: Group name to filter by
+        gene_to_group: Mapping of gene symbols to group names
+        curie_to_symbol: Mapping of gene CURIEs to symbols (for reverse lookup)
+        disease_curie: Disease CURIE (always included if connected)
+
+    Returns:
+        Filtered subgraph with group genes + their intermediates + disease
+    """
+    if not selected_group or selected_group == "All Groups":
+        return graph
+
+    # Build reverse mapping: symbol -> curie
+    symbol_to_curie = {v: k for k, v in curie_to_symbol.items()}
+
+    # Find gene CURIEs in the selected group
+    group_gene_curies = set()
+    for symbol, group in gene_to_group.items():
+        if group == selected_group:
+            curie = symbol_to_curie.get(symbol)
+            if curie and curie in graph:
+                group_gene_curies.add(curie)
+
+    if not group_gene_curies:
+        logger.warning(f"No genes found in group '{selected_group}'")
+        if isinstance(graph, nx.MultiDiGraph):
+            return nx.MultiDiGraph()
+        return nx.DiGraph()
+
+    # Build node set: group genes + their intermediate neighbors
+    nodes_to_include = set(group_gene_curies)
+
+    # Find intermediate nodes connected to group genes
+    for gene_curie in group_gene_curies:
+        for neighbor in graph.predecessors(gene_curie):
+            nodes_to_include.add(neighbor)
+        for neighbor in graph.successors(gene_curie):
+            nodes_to_include.add(neighbor)
+
+    # Always include disease node if it connects to any included intermediate
+    if disease_curie and disease_curie in graph:
+        disease_neighbors = set(graph.predecessors(disease_curie)) | set(graph.successors(disease_curie))
+        if disease_neighbors & nodes_to_include:
+            nodes_to_include.add(disease_curie)
+
+    # Create subgraph
+    filtered_graph = graph.subgraph(nodes_to_include).copy()
+
+    # Mark group genes for potential styling
+    for node in filtered_graph.nodes():
+        filtered_graph.nodes[node]['in_filter'] = node in group_gene_curies
+
+    logger.info(
+        f"Gene group filter '{selected_group}': {len(group_gene_curies)} group genes, "
+        f"{filtered_graph.number_of_nodes()} total nodes (with intermediates), "
+        f"{filtered_graph.number_of_edges()} edges"
+    )
+
+    return filtered_graph
+
+
+def filter_graph_by_publication(
+    graph: Union[nx.DiGraph, nx.MultiDiGraph],
+    selected_publication: str,
+    query_genes: List[str],
+    disease_curie: Optional[str] = None,
+) -> Union[nx.DiGraph, nx.MultiDiGraph]:
+    """Filter graph to intermediates with the publication, preserving context.
+
+    Strategy:
+    1. Find edges that have the selected publication (highlighted edges)
+    2. Identify intermediate nodes connected by these edges
+    3. Keep ALL edges connected to these intermediates (to maintain context)
+    4. Always include query genes and disease node
+    5. Mark edges with publication as '_has_filtered_pub=True' for highlighting
+
+    This avoids orphan nodes by keeping the full neighborhood of relevant intermediates.
+
+    Args:
+        graph: Full NetworkX graph (DiGraph or MultiDiGraph)
+        selected_publication: Publication ID to filter by (e.g., "PMID:12345")
+        query_genes: Query gene CURIEs (always included)
+        disease_curie: Optional disease CURIE (always included if present)
+
+    Returns:
+        Filtered subgraph with edges marked for highlighting
+    """
+    from biograph_explorer.utils.publication_utils import normalize_publication_id
+
+    if not selected_publication:
+        return graph
+
+    normalized_pub = normalize_publication_id(selected_publication)
+    if not normalized_pub:
+        return graph
+
+    query_gene_set = set(query_genes) if query_genes else set()
+
+    # Step 1: Find edges with the publication and collect intermediate nodes
+    edges_with_pub = set()  # (u, v) or (u, v, key) tuples
+    intermediates_with_pub = set()  # Intermediate nodes connected by pub edges
+
+    if isinstance(graph, nx.MultiDiGraph):
+        for u, v, key, data in graph.edges(keys=True, data=True):
+            pubs = data.get('publications', []) or []
+            normalized_pubs = [normalize_publication_id(p) for p in pubs if p]
+            if normalized_pub in normalized_pubs:
+                edges_with_pub.add((u, v, key))
+                # Track intermediate nodes (non-query-gene endpoints)
+                if u not in query_gene_set and u != disease_curie:
+                    intermediates_with_pub.add(u)
+                if v not in query_gene_set and v != disease_curie:
+                    intermediates_with_pub.add(v)
+    else:
+        for u, v, data in graph.edges(data=True):
+            pubs = data.get('publications', []) or []
+            normalized_pubs = [normalize_publication_id(p) for p in pubs if p]
+            if normalized_pub in normalized_pubs:
+                edges_with_pub.add((u, v))
+                if u not in query_gene_set and u != disease_curie:
+                    intermediates_with_pub.add(u)
+                if v not in query_gene_set and v != disease_curie:
+                    intermediates_with_pub.add(v)
+
+    if not intermediates_with_pub:
+        logger.warning(f"No intermediate nodes found with publication '{selected_publication}'")
+        # Return empty graph of same type instead of original
+        if isinstance(graph, nx.MultiDiGraph):
+            return nx.MultiDiGraph()
+        return nx.DiGraph()
+
+    # Step 2: Build node set - intermediates with pub + their connected query genes + disease
+    nodes_to_include = set(intermediates_with_pub)
+
+    # Include query genes that connect to any intermediate with the publication
+    for query_gene in query_gene_set:
+        if query_gene not in graph:
+            continue
+        neighbors = set(graph.predecessors(query_gene)) | set(graph.successors(query_gene))
+        if neighbors & intermediates_with_pub:
+            nodes_to_include.add(query_gene)
+
+    # Always include disease node if it connects to any intermediate with pub
+    if disease_curie and disease_curie in graph:
+        disease_neighbors = set(graph.predecessors(disease_curie)) | set(graph.successors(disease_curie))
+        if disease_neighbors & intermediates_with_pub:
+            nodes_to_include.add(disease_curie)
+
+    # Step 3: Create subgraph with these nodes
+    filtered_graph = graph.subgraph(nodes_to_include).copy()
+
+    # Step 4: Mark edges with/without the publication for highlighting
+    pub_edge_count = 0
+    if isinstance(filtered_graph, nx.MultiDiGraph):
+        for u, v, key, data in filtered_graph.edges(keys=True, data=True):
+            has_pub = (u, v, key) in edges_with_pub
+            filtered_graph[u][v][key]['_has_filtered_pub'] = has_pub
+            if has_pub:
+                pub_edge_count += 1
+    else:
+        for u, v, data in filtered_graph.edges(data=True):
+            has_pub = (u, v) in edges_with_pub
+            filtered_graph[u][v]['_has_filtered_pub'] = has_pub
+            if has_pub:
+                pub_edge_count += 1
+
+    logger.info(
+        f"Publication filter '{selected_publication}': {filtered_graph.number_of_nodes()} nodes, "
+        f"{filtered_graph.number_of_edges()} edges ({pub_edge_count} with publication)"
+    )
+
+    return filtered_graph

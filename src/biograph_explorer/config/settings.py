@@ -22,6 +22,7 @@ class Settings(BaseModel):
     cache_dir: Path = Field(default=Path("data/cache"), description="TRAPI response cache")
     sessions_dir: Path = Field(default=Path("data/sessions"), description="Pickled graphs")
     exports_dir: Path = Field(default=Path("data/exports"), description="HTML/PNG exports")
+    logs_dir: Path = Field(default=Path("data/logs"), description="API query logs")
 
     # TRAPI settings
     trapi_timeout: int = Field(default=30, description="API timeout in seconds")
@@ -64,6 +65,7 @@ class Settings(BaseModel):
         self.cache_dir.mkdir(exist_ok=True, parents=True)
         self.sessions_dir.mkdir(exist_ok=True, parents=True)
         self.exports_dir.mkdir(exist_ok=True, parents=True)
+        self.logs_dir.mkdir(exist_ok=True, parents=True)
 
 
 # Singleton instance

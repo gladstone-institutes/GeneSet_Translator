@@ -4,8 +4,7 @@ Tests:
 - Package initialization
 - Version availability
 
-Phase 2 Status: Stub created
-TODO: Add integration tests if needed
+
 """
 
 from biograph_explorer import __version__

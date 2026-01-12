@@ -1,6 +1,6 @@
 # BioGraph Explorer 🧬
 
-**Status**: Phase 2 Complete ✅ | Phase 3 In Progress 📋
+**Status**: Phase 3 Complete ✅ | Phase 4 Planning 📋
 
 Streamlit application for exploring biomedical knowledge graphs through multi-gene TRAPI queries, network clustering, and interactive visualization.
 
@@ -43,13 +43,20 @@ The goal is to discover effective workflows for transforming complex high dimens
 - ✅ Node resizing in network view - currently broken
 - ✅ Improved query builder (3-hop queries, gene -> [intermediate] -> disease associated BiologicalProcess)
 
-**Planned Features (Phase 3):**
+**Phase 3 Features (Complete):**
 
-- 📋 NodeAnnotator based annotations for intermediate nodes to improve clustering
-- 📋 LLM cluster summarization
-- 📋 Session management (explicitly save/load sessions, currently just cached in a local directory)
-- 📋 Improve export to Cytoscape 
-- 📋 Augmenting the query results with external data sources in addition to NodeAnnotator
+- ✅ Knowledge source metadata extraction from Biolink Information Resource Registry
+- ✅ Citation-based LLM category summaries using Claude Haiku 4
+- ✅ Interactive citation graph viewer
+- ✅ Token-aware sampling for cost optimization (~$0.02 per query)
+- ✅ Anti-hallucination safeguards with tool-based validation
+
+**Planned Features (Phase 4):**
+
+- 📋 Session management (explicitly save/load sessions)
+- 📋 Interactive chat interface for graph exploration
+- 📋 Improve export to Cytoscape
+- 📋 Additional augmentation from external data sources
 
 
 > **Note**: This is research software in active development. Some features are incomplete and subject to change.
@@ -74,7 +81,23 @@ poetry install
 
 ## Quick Start
 
-### 1. Run the App
+### 1. Optional: Enable LLM Summaries (Phase 3)
+
+To use the LLM-assisted category summaries feature:
+
+```bash
+# Copy the example environment file
+cp .env.example .env
+
+# Edit .env and add your Anthropic API key
+# ANTHROPIC_API_KEY=sk-ant-...
+```
+
+Get your API key from: https://console.anthropic.com/
+
+**Cost**: Approximately $0.02 per full query with all categories (~$0.003 per category).
+
+### 2. Run the App
 
 ```bash
 streamlit run app.py
@@ -84,7 +107,7 @@ streamlit run app.py
 ![BioGraph Explorer Main Interface](static/images/main_page.png)   
 
 
-### 2. Try an Example Query
+### 3. Try an Example Query
 
 1. In the sidebar, select **"Example Dataset"**
 2. Choose **"COVID-19 (10 genes)"** (default)
@@ -92,15 +115,15 @@ streamlit run app.py
 4. Select intermediate node types
 5. Click **"Run Query"** (takes ~3-5 minutes)
 
-### 3. Explore Results
+### 4. Explore Results
 
-The app displays results in three tabs:
+The app displays results in tabs:
 
-- **Overview**: Graph statistics, node categories, top convergent nodes
+- **Overview**: Graph statistics, node categories, data sources, top convergent nodes
 - **Network**: Interactive Cytoscape.js visualization (drag to pan, scroll to zoom)
-- **Communities**: Detected biological modules with hub nodes
+- **Summary** (if API key configured): LLM-generated category summaries with citations
 
-### 4. Try Your Own Genes
+### 5. Try Your Own Genes
 
 - Create a CSV with a `gene_symbol` column (see [data/test_genes/covid19_genes.csv](data/test_genes/covid19_genes.csv) for format) or enter genes manually in the sidebar. 
 

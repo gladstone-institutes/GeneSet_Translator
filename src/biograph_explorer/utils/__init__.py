@@ -8,8 +8,7 @@ Provides:
 """
 
 from .validators import validate_gene_list, validate_disease_curie, ValidationError
-from .formatters import format_node_label, format_edge_label, format_clustering_results
-from .persistence import save_graph, load_graph, save_session, load_session
+from .formatters import format_node_label, format_edge_label
 from .biolink_predicates import (
     GRANULARITY_PRESETS,
     filter_predicates_by_granularity,
@@ -18,6 +17,12 @@ from .biolink_predicates import (
     get_predicate_depths,
     get_predicate_info,
 )
+from .publication_utils import (
+    get_publication_frequency,
+    normalize_publication_id,
+    format_publication_display,
+    validate_publication_extraction,
+)
 
 __all__ = [
     "validate_gene_list",
@@ -25,15 +30,14 @@ __all__ = [
     "ValidationError",
     "format_node_label",
     "format_edge_label",
-    "format_clustering_results",
-    "save_graph",
-    "load_graph",
-    "save_session",
-    "load_session",
     "GRANULARITY_PRESETS",
     "filter_predicates_by_granularity",
     "get_allowed_predicates_for_display",
     "get_excluded_predicates_for_display",
     "get_predicate_depths",
     "get_predicate_info",
+    "get_publication_frequency",
+    "normalize_publication_id",
+    "format_publication_display",
+    "validate_publication_extraction",
 ]

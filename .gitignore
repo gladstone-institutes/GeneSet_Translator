@@ -142,8 +142,9 @@ dmypy.json
 .DS_Store
 
 
-# Query caches
+# Query caches and logs
 data/cache
+data/logs
 notebooks/data/
 
 # Claude files
@@ -151,3 +152,4 @@ notebooks/data/
 CLAUDE.md
 IMPLEMENTATION_STATUS.md
 PROJECT_PLAN.md
+.playwright-mcp
