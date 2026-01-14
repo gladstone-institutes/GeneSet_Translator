@@ -22,8 +22,8 @@ Explore biomedical knowledge graphs for gene sets via NCATS Translator.
 
 1. Clone and install:
    ```bash
-   git clone https://github.com/gladstone-institutes/geneset_translator.git
-   cd geneset_translator
+   git clone https://github.com/gladstone-institutes/GeneSet_Translator.git
+   cd GeneSet_Translator
    poetry install
    ```
 
@@ -63,7 +63,7 @@ Upload a CSV with a `gene_symbol` column or enter genes manually in the sidebar.
 
 ## Troubleshooting
 
-- **No results**: Some APIs may fail (5-6 successes is normal). Try different genes.
+- **No results**: Some APIs may fail (5-6 successes is normal). Try different genes, or less specific predicate filter.
 - **Empty graph**: Check disease CURIE format (e.g., `MONDO:0100096` for COVID-19)
 - **Slow visualization**: Reduce the `max_intermediates` slider or use simpler layouts
 
