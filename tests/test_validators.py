@@ -18,11 +18,11 @@ class TestGeneListValidation:
         with pytest.raises(ValidationError):
             validate_gene_list([])
 
-    def test_validate_too_many_genes(self):
-        """Test that gene list exceeding max_genes raises ValidationError."""
-        genes = [f"GENE{i}" for i in range(101)]
-        with pytest.raises(ValidationError):
-            validate_gene_list(genes, max_genes=100)
+    def test_validate_large_gene_list(self):
+        """Test that large gene lists are accepted without limit."""
+        genes = [f"GENE{i}" for i in range(500)]
+        result = validate_gene_list(genes)
+        assert len(result) == 500
 
     def test_gene_list_trimming(self):
         """Test that gene symbols are trimmed and cleaned."""

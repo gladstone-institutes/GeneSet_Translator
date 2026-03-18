@@ -21,14 +21,12 @@ class ValidationError(Exception):
 def validate_gene_list(
     gene_symbols: List[str],
     min_genes: int = 1,
-    max_genes: int = 100,
 ) -> List[str]:
     """Validate gene symbol list.
 
     Args:
         gene_symbols: List of gene symbols to validate
         min_genes: Minimum number of genes required
-        max_genes: Maximum number of genes allowed
 
     Returns:
         Cleaned gene list (trimmed, uppercased)
@@ -52,9 +50,6 @@ def validate_gene_list(
 
     if len(unique_genes) < min_genes:
         raise ValidationError(f"At least {min_genes} gene(s) required, got {len(unique_genes)}")
-
-    if len(unique_genes) > max_genes:
-        raise ValidationError(f"Maximum {max_genes} genes allowed, got {len(unique_genes)}")
 
     return unique_genes
 

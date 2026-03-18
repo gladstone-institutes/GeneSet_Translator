@@ -45,7 +45,7 @@ If you have trouble installing the app dependencies, consider using Docker (inst
 
 Run the app:
 ```bash
-streamlit run app.py
+poetry run streamlit run app.py
 ```
 
 ### Docker
@@ -64,7 +64,7 @@ This pulls a pre-built image and runs the app. The script mounts your local `.en
 ### Quick Start
 1. Select an example dataset
 2. Choose a query pattern and intermediate node types
-3. Click "Run Query" (takes 3-5 minutes)
+3. Click "Run Query" (takes 10-15 minutes)
 4. Explore results in the Network, Overview, and Summary tabs
 
 ### Custom Genes

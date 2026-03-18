@@ -15,6 +15,7 @@ from typing import Dict, Any
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+from geneset_translator import __version__
 from geneset_translator.core import TRAPIClient, GraphBuilder
 from geneset_translator.utils import validate_gene_list, validate_disease_curie, ValidationError
 from geneset_translator.utils.biolink_predicates import (
@@ -157,7 +158,7 @@ if 'name_search_filter' not in st.session_state:
 
 # Title
 st.markdown("### :material/biotech: GeneSet Translator")
-st.caption("Explore biomedical knowledge graphs for your gene sets via NCATS Translator")
+st.caption(f"v{__version__} — Explore biomedical knowledge graphs for your gene sets via NCATS Translator")
 
 # Sidebar: Input Configuration
 st.sidebar.header(":material/input: Input Configuration")
@@ -648,7 +649,7 @@ if run_query:
 
     try:
         # Validate input
-        validated_genes = validate_gene_list(genes, min_genes=1, max_genes=50)
+        validated_genes = validate_gene_list(genes, min_genes=1)
         
         if disease_curie:
             disease_curie = validate_disease_curie(disease_curie)

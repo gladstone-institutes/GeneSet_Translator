@@ -1,4 +1,8 @@
 #!/bin/bash
+set -euo pipefail
+
+IMAGE="natalie23gill/geneset-translator"
+TAG="${1:-latest}"
 
 # Mount .env file if it exists
 ENV_MOUNT=""
@@ -11,5 +15,5 @@ docker run -it \
     -p 8501:8501 \
     -v "$(pwd)/data:/app/data" \
     $ENV_MOUNT \
-    natalie23gill/geneset-translator:1.0.0 \
+    "${IMAGE}:${TAG}" \
     streamlit run app.py --server.address 0.0.0.0
